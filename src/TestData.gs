@@ -230,6 +230,10 @@ function generateAssetData_(testUsers) {
       const updatedDate = new Date(createdDate.getTime() + Math.random() * (now.getTime() - createdDate.getTime()));
       const id = `AST-${String(assets.length + 1).padStart(5, '0')}`;
 
+      const leaseEnd = Math.random() < 0.2 ? randomDate_(new Date(), new Date(2026, 11, 31)) : null;
+      const warrantyEnd = randomDate_(new Date(purchaseDate), new Date(purchaseDate.getTime() + 3 * 365 * 86400000));
+      const returnDue = status === '返却待ち' ? randomDate_(new Date(), new Date(2025, 11, 31)) : null;
+
       assets.push([
         id,
         `${mfr} ${model}`,
@@ -239,6 +243,9 @@ function generateAssetData_(testUsers) {
         serial,
         purchaseDate,
         price,
+        leaseEnd || '',
+        warrantyEnd,
+        returnDue || '',
         userId,
         userName,
         userEmail,
@@ -248,6 +255,8 @@ function generateAssetData_(testUsers) {
         ip,
         mac,
         os,
+        '',
+        '',
         '',
         createdDate,
         updatedDate

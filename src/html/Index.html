@@ -19,8 +19,10 @@
       <nav class="nav">
         <a class="nav-item active" data-page="dashboard" onclick="navigateTo('dashboard')"><span class="nav-label">ダッシュボード</span></a>
         <a class="nav-item" data-page="assets" onclick="navigateTo('assets')"><span class="nav-label">資産一覧</span></a>
+        <a class="nav-item" data-page="inventory" onclick="navigateTo('inventory')"><span class="nav-label">棚卸し</span></a>
         <a class="nav-item" data-page="users" onclick="navigateTo('users')"><span class="nav-label">ユーザー管理</span></a>
         <a class="nav-item" data-page="history" onclick="navigateTo('history')"><span class="nav-label">変更履歴</span></a>
+        <a class="nav-item" data-page="settings" onclick="navigateTo('settings')"><span class="nav-label">設定</span></a>
       </nav>
     </aside>
 
@@ -38,6 +40,10 @@
       <!-- ダッシュボード -->
       <div class="page active" id="page-dashboard">
         <div class="dashboard-cards" id="dashboardCards"></div>
+        <div class="card" id="expiringSoonCard" style="display:none; margin-bottom:16px;">
+          <h3 class="card-title">期限切れ間近（リース・保証）</h3>
+          <div class="table-wrap" style="max-height:200px;"><table class="table" id="expiringSoonTable"><thead><tr><th>資産番号</th><th>資産名</th><th>種類</th><th>期限日</th><th>使用者</th></tr></thead><tbody></tbody></table></div>
+        </div>
         <div class="dashboard-grid">
           <div class="card"><h3 class="card-title">カテゴリ別内訳</h3><div id="categoryChart"></div></div>
           <div class="card"><h3 class="card-title">部署別内訳</h3><div id="departmentChart"></div></div>
@@ -111,6 +117,43 @@
         </div>
       </div>
 
+      <!-- 棚卸し -->
+      <div class="page" id="page-inventory">
+        <div class="card" style="margin-bottom:16px;">
+          <h3 class="card-title">棚卸しイベント</h3>
+          <div id="inventoryEventStatus" style="margin-bottom:12px;"></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+            <input type="text" class="input" id="inventoryEventName" placeholder="イベント名（例: 2025年上期）" style="width:200px;">
+            <button class="btn btn-primary" onclick="startInventory()">棚卸しを開始</button>
+          </div>
+        </div>
+        <div class="card" style="margin-bottom:16px;">
+          <h3 class="card-title">確認済みにする</h3>
+          <p style="font-size:12px;color:var(--text-muted);margin-bottom:8px;">資産番号とSlackメッセージURL（任意）を入力して「確認済み」にします。</p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+            <input type="text" class="input" id="inventoryAssetId" placeholder="資産番号" style="width:160px;">
+            <input type="text" class="input" id="inventorySlackUrl" placeholder="SlackのメッセージURL（任意）" style="flex:1;min-width:200px;">
+            <button class="btn btn-primary" onclick="markInventoryChecked()">確認済みにする</button>
+          </div>
+        </div>
+        <div class="card">
+          <h3 class="card-title">未確認資産一覧</h3>
+          <div class="table-wrap"><table class="table" id="inventoryUncheckedTable"><thead><tr><th>資産番号</th><th>資産名</th><th>カテゴリ</th><th>使用者</th><th>ステータス</th></tr></thead><tbody></tbody></table></div>
+        </div>
+      </div>
+
+      <!-- 設定 -->
+      <div class="page" id="page-settings">
+        <div class="card" style="max-width:560px;">
+          <h3 class="card-title">Slack連携</h3>
+          <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">アラート・リマインド・ステータス変更通知をSlackに送信します。Webhook URLはスクリプトプロパティに保存されます。</p>
+          <div class="form-group"><label>Webhook URL</label><input type="url" class="input" id="settingsSlackWebhook" placeholder="https://hooks.slack.com/services/..."></div>
+          <div class="form-group"><label><input type="checkbox" id="settingsSlackEnabled" checked> Slack通知を有効にする</label></div>
+          <div style="display:flex;gap:8px;"><button class="btn btn-primary" onclick="saveSlackSettings()">保存</button><button class="btn btn-secondary" onclick="loadSlackSettings()">再読み込み</button></div>
+          <p id="settingsSlackStatus" style="font-size:12px;color:var(--text-muted);margin-top:12px;"></p>
+        </div>
+      </div>
+
       <!-- 変更履歴 -->
       <div class="page" id="page-history">
         <div class="filter-bar">
@@ -139,6 +182,9 @@
             <div class="form-group"><label>シリアル番号</label><input type="text" class="input" id="assetSerial"></div>
             <div class="form-group"><label>購入日</label><input type="date" class="input" id="assetPurchaseDate"></div>
             <div class="form-group"><label>購入金額（円）</label><input type="number" class="input" id="assetPrice" min="0"></div>
+            <div class="form-group"><label>リース終了日</label><input type="date" class="input" id="assetLeaseEndDate"></div>
+            <div class="form-group"><label>保証期限</label><input type="date" class="input" id="assetWarrantyEndDate"></div>
+            <div class="form-group"><label>返却予定日</label><input type="date" class="input" id="assetReturnDueDate" title="返却待ちのときのリマインドに使用"></div>
             <div class="form-group"><label>ステータス</label><select class="input" id="assetStatus"></select></div>
             <div class="form-group autocomplete-group"><label>使用者</label><input type="text" class="input" id="assetUserName" placeholder="名前またはメールで検索..." autocomplete="off"><div class="autocomplete-dropdown" id="userAutocomplete"></div></div>
             <div class="form-group"><label>部署</label><select class="input" id="assetDepartment"></select></div>

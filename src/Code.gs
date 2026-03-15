@@ -9,21 +9,28 @@ const SHEETS = {
   DEPARTMENTS: '部署',
   USERS: 'ユーザー',
   HISTORY: '履歴',
-  DATA_SOURCES: '外部データソース'
+  DATA_SOURCES: '外部データソース',
+  LENDING: '貸出履歴',
+  INVENTORY_EVENTS: '棚卸しイベント'
 };
 
 const STATUS_OPTIONS = ['利用中', '在庫', '受取待ち', '返却待ち', '回収連絡済み', '回収済み', 'リース終了', '紛失', '保管'];
 
 const ASSET_HEADERS = [
   '資産番号', '資産名', 'カテゴリ', 'メーカー', 'モデル', 'シリアル番号',
-  '購入日', '購入金額', '使用者ID', '使用者名', '使用者メール', '部署', '設置場所', 'ステータス',
-  'IPアドレス', 'MACアドレス', 'OS', '備考', '登録日', '更新日'
+  '購入日', '購入金額', 'リース終了日', '保証期限', '返却予定日',
+  '使用者ID', '使用者名', '使用者メール', '部署', '設置場所', 'ステータス',
+  'IPアドレス', 'MACアドレス', 'OS', '備考',
+  '棚卸し確認日', '棚卸しSlackURL',
+  '登録日', '更新日'
 ];
 
 const CATEGORY_HEADERS = ['カテゴリID', 'カテゴリ名'];
 const DEPARTMENT_HEADERS = ['部署ID', '部署名'];
 const USER_HEADERS = ['ユーザーID', '氏名', 'メールアドレス', '部署', '役職', '電話番号', '在籍状況'];
 const HISTORY_HEADERS = ['履歴ID', '資産番号', '変更日時', '変更種別', '変更内容', '変更者'];
+const LENDING_HEADERS = ['履歴ID', '資産番号', '貸出日', '返却日', '貸出先ユーザーID', '貸出先氏名', '貸出先メール', '貸出元（前の使用者）', '備考', '登録日時'];
+const INVENTORY_EVENT_HEADERS = ['イベントID', 'イベント名', '開始日', '終了日', 'ステータス', '登録日時'];
 const DATA_SOURCE_HEADERS = ['データソースID', 'データソース名', 'シート名', '紐付けキー（資産側）', '紐付けキー（データ側）', '最終更新日時', '更新方法', '備考'];
 
 const DEFAULT_CATEGORIES = [
@@ -90,6 +97,8 @@ function onOpen() {
     .addItem('テストデータ生成（200件）', 'generateTestData')
     .addSeparator()
     .addItem('外部データソース一覧', 'showDataSources')
+    .addSeparator()
+    .addItem('日次アラートのトリガーを設定', 'installDailyAlertTrigger')
     .addToUi();
 }
 
@@ -120,10 +129,13 @@ function setup() {
 
   // コアシート
   createSheetIfNotExists(ss, SHEETS.ASSETS, ASSET_HEADERS);
+  ensureAssetSheetColumns(ss); // 既存資産シートに不足列を追加
   createSheetIfNotExists(ss, SHEETS.CATEGORIES, CATEGORY_HEADERS);
   createSheetIfNotExists(ss, SHEETS.DEPARTMENTS, DEPARTMENT_HEADERS);
   createSheetIfNotExists(ss, SHEETS.USERS, USER_HEADERS);
   createSheetIfNotExists(ss, SHEETS.HISTORY, HISTORY_HEADERS);
+  createSheetIfNotExists(ss, SHEETS.LENDING, LENDING_HEADERS);
+  createSheetIfNotExists(ss, SHEETS.INVENTORY_EVENTS, INVENTORY_EVENT_HEADERS);
 
   // 外部データソース管理シート
   createSheetIfNotExists(ss, SHEETS.DATA_SOURCES, DATA_SOURCE_HEADERS);
@@ -132,6 +144,21 @@ function setup() {
   initializeDataSources(ss);
 
   SpreadsheetApp.getUi().alert('初期セットアップが完了しました。');
+}
+
+/**
+ * 資産台帳シートの列数が ASSET_HEADERS より少ない場合、不足列を追加する（マイグレーション）
+ */
+function ensureAssetSheetColumns(ss) {
+  const sheet = ss.getSheetByName(SHEETS.ASSETS);
+  if (!sheet) return;
+  const currentCols = sheet.getLastColumn();
+  if (currentCols >= ASSET_HEADERS.length) return;
+  for (let c = currentCols + 1; c <= ASSET_HEADERS.length; c++) {
+    const cell = sheet.getRange(1, c);
+    cell.setValue(ASSET_HEADERS[c - 1]);
+    cell.setBackground('#2563EB').setFontColor('#FFFFFF').setFontWeight('bold').setHorizontalAlignment('center');
+  }
 }
 
 function createSheetIfNotExists(ss, sheetName, headers) {

@@ -9,6 +9,9 @@ const ALL_COLUMNS = [
   { key: 'serial', label: 'シリアル番号' },
   { key: 'purchaseDate', label: '購入日' },
   { key: 'price', label: '購入金額' },
+  { key: 'leaseEndDate', label: 'リース終了日' },
+  { key: 'warrantyEndDate', label: '保証期限' },
+  { key: 'returnDueDate', label: '返却予定日' },
   { key: 'userName', label: '使用者' },
   { key: 'userEmail', label: 'メール' },
   { key: 'department', label: '部署' },
@@ -18,11 +21,13 @@ const ALL_COLUMNS = [
   { key: 'mac', label: 'MACアドレス' },
   { key: 'os', label: 'OS' },
   { key: 'notes', label: '備考' },
+  { key: 'inventoryCheckedDate', label: '棚卸し確認日' },
+  { key: 'inventorySlackUrl', label: '棚卸しSlackURL' },
   { key: 'createdDate', label: '登録日' },
   { key: 'updatedDate', label: '更新日' }
 ];
 
-const DEFAULT_VISIBLE = ['id','name','category','manufacturer','userName','userEmail','department','status','purchaseDate'];
+const DEFAULT_VISIBLE = ['id','name','category','manufacturer','userName','userEmail','department','status','purchaseDate','leaseEndDate','warrantyEndDate'];
 
 const STATUS_OPTIONS = ['利用中','在庫','受取待ち','返却待ち','回収連絡済み','回収済み','リース終了','紛失','保管'];
 
@@ -201,7 +206,7 @@ function navigateTo(page) {
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   const pe = document.getElementById('page-' + page); if (pe) pe.classList.add('active');
   const ne = document.querySelector(`[data-page="${page}"]`); if (ne) ne.classList.add('active');
-  const titles = { dashboard:'ダッシュボード', assets:'資産一覧', users:'ユーザー管理', history:'変更履歴' };
+  const titles = { dashboard:'ダッシュボード', assets:'資産一覧', inventory:'棚卸し', users:'ユーザー管理', history:'変更履歴', settings:'設定' };
   document.getElementById('pageTitle').textContent = titles[page] || '';
   document.getElementById('addAssetBtn').style.display = page === 'assets' ? 'inline-flex' : 'none';
   document.getElementById('addUserBtn').style.display = page === 'users' ? 'inline-flex' : 'none';
@@ -213,8 +218,10 @@ function renderCurrentPage() {
   switch (state.currentPage) {
     case 'dashboard': renderDashboard(); break;
     case 'assets': renderAssetTable(); break;
+    case 'inventory': loadInventoryPage(); break;
     case 'users': renderUsersTable(); break;
     case 'history': state.historyData.length === 0 ? loadHistory() : renderHistory(); break;
+    case 'settings': loadSlackSettings(); break;
   }
 }
 
@@ -227,6 +234,22 @@ function renderDashboard() {
   let h = `<div class="stat-card accent"><div class="stat-label">総資産数</div><div class="stat-value">${d.total}</div><div class="stat-sub">総額 ${fmtCur(d.totalCost)}</div></div>`;
   STATUS_OPTIONS.forEach(s => { const c = d.statusCount[s]||0; if(c>0) h += `<div class="stat-card ${ss[s]||''}"><div class="stat-label">${esc(s)}</div><div class="stat-value">${c}</div><div class="stat-sub">${pct(c,d.total)}</div></div>`; });
   document.getElementById('dashboardCards').innerHTML = h;
+
+  const expiringCard = document.getElementById('expiringSoonCard');
+  const expiringTb = document.querySelector('#expiringSoonTable tbody');
+  if (d.expiringSoon && d.expiringSoon.length > 0) {
+    expiringCard.style.display = 'block';
+    expiringTb.innerHTML = d.expiringSoon.map(a => {
+      const lease = a.leaseEndDate ? `リース ${a.leaseEndDate}` : '';
+      const warranty = a.warrantyEndDate ? `保証 ${a.warrantyEndDate}` : '';
+      const kind = [lease, warranty].filter(Boolean).join(' / ');
+      const date = a.leaseEndDate || a.warrantyEndDate || '';
+      return `<tr><td>${esc(a.id)}</td><td>${esc(a.name)}</td><td>${esc(kind)}</td><td>${esc(date)}</td><td>${esc(a.userName)}</td></tr>`;
+    }).join('');
+  } else {
+    expiringCard.style.display = 'none';
+  }
+
   renderBarChart('categoryChart', d.categoryCount); renderBarChart('departmentChart', d.departmentCount);
   const tb = document.querySelector('#recentHistoryTable tbody');
   tb.innerHTML = (d.recentHistory && d.recentHistory.length > 0) ? d.recentHistory.map(h => `<tr><td>${esc(h.dateTime)}</td><td>${esc(h.assetId)}</td><td><span class="badge badge-${esc(h.changeType)}">${esc(h.changeType)}</span></td><td>${esc(h.changeDescription)}</td><td>${esc(h.changedBy)}</td></tr>`).join('') : '<tr><td colspan="5" style="text-align:center;color:var(--text-muted);">データなし</td></tr>';
@@ -640,7 +663,7 @@ function showEditModal(assetId) {
   const a = state.assets.find(x => x.id === assetId); if (!a) return;
   state.editingAsset = a;
   document.getElementById('modalTitle').textContent = '資産編集';
-  ['assetId:id','assetName:name','assetCategory:category','assetManufacturer:manufacturer','assetModel:model','assetSerial:serial','assetPurchaseDate:purchaseDate','assetPrice:price','assetUserName:userName','assetUserId:userId','assetUserEmail:userEmail','assetDepartment:department','assetLocation:location','assetStatus:status','assetIP:ip','assetMAC:mac','assetOS:os','assetNotes:notes'].forEach(m => {
+  ['assetId:id','assetName:name','assetCategory:category','assetManufacturer:manufacturer','assetModel:model','assetSerial:serial','assetPurchaseDate:purchaseDate','assetPrice:price','assetLeaseEndDate:leaseEndDate','assetWarrantyEndDate:warrantyEndDate','assetReturnDueDate:returnDueDate','assetUserName:userName','assetUserId:userId','assetUserEmail:userEmail','assetDepartment:department','assetLocation:location','assetStatus:status','assetIP:ip','assetMAC:mac','assetOS:os','assetNotes:notes'].forEach(m => {
     const [elId, key] = m.split(':'); document.getElementById(elId).value = a[key] || '';
   });
   document.getElementById('modalOverlay').classList.add('open');
@@ -651,7 +674,7 @@ function closeModalOverlay(e) { if (e.target === e.currentTarget) closeModal(); 
 
 function saveAsset(event) {
   event.preventDefault();
-  const fields = ['assetId:id','assetName:name','assetCategory:category','assetManufacturer:manufacturer','assetModel:model','assetSerial:serial','assetPurchaseDate:purchaseDate','assetPrice:price','assetUserId:userId','assetUserName:userName','assetUserEmail:userEmail','assetDepartment:department','assetLocation:location','assetStatus:status','assetIP:ip','assetMAC:mac','assetOS:os','assetNotes:notes'];
+  const fields = ['assetId:id','assetName:name','assetCategory:category','assetManufacturer:manufacturer','assetModel:model','assetSerial:serial','assetPurchaseDate:purchaseDate','assetPrice:price','assetLeaseEndDate:leaseEndDate','assetWarrantyEndDate:warrantyEndDate','assetReturnDueDate:returnDueDate','assetUserId:userId','assetUserName:userName','assetUserEmail:userEmail','assetDepartment:department','assetLocation:location','assetStatus:status','assetIP:ip','assetMAC:mac','assetOS:os','assetNotes:notes'];
   const asset = {}; fields.forEach(m => { const [eId, k] = m.split(':'); asset[k] = document.getElementById(eId).value; });
   const btn = document.getElementById('saveBtn'); btn.disabled = true; btn.textContent = '保存中...';
   const isEdit = !!asset.id; const handler = isEdit ? 'updateAsset' : 'addAsset';
@@ -677,9 +700,19 @@ function showDetail(id) {
     else val = esc(val) || '-';
     return `<div class="detail-item"><div class="detail-label">${esc(c.label)}</div><div class="detail-value">${val}</div></div>`;
   }).join('');
-  document.getElementById('detailBody').innerHTML = `<div class="detail-grid">${items}</div><div id="extDataSection" style="margin-top:20px;border-top:1px solid var(--border);padding-top:16px;"><p style="font-size:12px;color:var(--text-muted);">外部データを読み込み中...</p></div>`;
+  document.getElementById('detailBody').innerHTML = `<div class="detail-grid">${items}</div><div id="lendingHistorySection" style="margin-top:16px;border-top:1px solid var(--border);padding-top:16px;"><p style="font-size:12px;color:var(--text-muted);">貸出履歴を読み込み中...</p></div><div id="extDataSection" style="margin-top:20px;border-top:1px solid var(--border);padding-top:16px;"><p style="font-size:12px;color:var(--text-muted);">外部データを読み込み中...</p></div>`;
   document.getElementById('detailEditBtn').onclick = () => { closeDetail(); showEditModal(id); };
   document.getElementById('detailOverlay').classList.add('open');
+
+  google.script.run.withSuccessHandler(lending => {
+    const section = document.getElementById('lendingHistorySection');
+    if (!section) return;
+    if (!lending || lending.length === 0) { section.innerHTML = '<p style="font-size:12px;color:var(--text-muted);">貸出履歴なし</p>'; return; }
+    section.innerHTML = '<h4 style="font-size:13px;margin-bottom:8px;">貸出履歴</h4><div class="table-wrap" style="max-height:180px;"><table class="table"><thead><tr><th>貸出日</th><th>返却日</th><th>貸出先</th><th>貸出元</th></tr></thead><tbody>' + lending.map(h => `<tr><td>${esc(h.lentAt)}</td><td>${esc(h.returnedAt) || '-'}</td><td>${esc(h.lentToName)} ${esc(h.lentToEmail)}</td><td>${esc(h.lentFromName)}</td></tr>`).join('') + '</tbody></table></div>';
+  }).withFailureHandler(() => {
+    const section = document.getElementById('lendingHistorySection');
+    if (section) section.innerHTML = '<p style="font-size:12px;color:var(--text-muted);">貸出履歴の取得に失敗しました</p>';
+  }).getLendingHistory(id);
 
   // 外部データ連携情報を非同期取得
   google.script.run.withSuccessHandler(extResults => {
@@ -746,6 +779,48 @@ function renderHistory() {
 }
 function filterHistory() { renderHistory(); }
 
+// ===== 設定（Slack） =====
+function loadSlackSettings() {
+  google.script.run.withSuccessHandler(r => {
+    const statusEl = document.getElementById('settingsSlackStatus');
+    if (!r) return;
+    document.getElementById('settingsSlackWebhook').value = '';
+    document.getElementById('settingsSlackEnabled').checked = r.enabled !== false;
+    if (statusEl) statusEl.textContent = r.webhookUrlSet ? 'Webhook URLは設定済みです。' : 'Webhook URLを入力して保存してください。';
+  }).withFailureHandler(() => {}).getSlackSettings();
+}
+function saveSlackSettings() {
+  const url = document.getElementById('settingsSlackWebhook').value.trim();
+  const enabled = document.getElementById('settingsSlackEnabled').checked;
+  google.script.run.withSuccessHandler(() => { showToast('Slack設定を保存しました', 'success'); loadSlackSettings(); }).withFailureHandler(e => showToast('エラー: ' + e.message, 'error')).setSlackSettings({ webhookUrl: url || undefined, enabled: enabled });
+}
+
+// ===== 棚卸し =====
+function loadInventoryPage() {
+  google.script.run.withSuccessHandler(r => {
+    const statusEl = document.getElementById('inventoryEventStatus');
+    const tbl = document.querySelector('#inventoryUncheckedTable tbody');
+    if (!r || !r.event) {
+      if (statusEl) statusEl.innerHTML = '<span style="color:var(--text-muted);">実施中の棚卸しイベントはありません。イベント名を入力して「棚卸しを開始」をクリックしてください。</span>';
+      if (tbl) tbl.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-muted);">実施中のイベントがありません</td></tr>';
+      return;
+    }
+    if (statusEl) statusEl.innerHTML = `<span class="badge badge-info">実施中</span> ${esc(r.event.name)}（開始: ${esc(r.event.startDate)}）`;
+    const list = r.list || [];
+    if (tbl) tbl.innerHTML = list.length === 0 ? '<tr><td colspan="5" style="text-align:center;color:var(--text-muted);">未確認の資産はありません</td></tr>' : list.map(a => `<tr><td>${esc(a.id)}</td><td>${esc(a.name)}</td><td>${esc(a.category)}</td><td>${esc(a.userName)}</td><td><span class="badge badge-${esc(a.status)}">${esc(a.status)}</span></td></tr>`).join('');
+  }).withFailureHandler(() => {}).getUncheckedAssetsForInventory();
+}
+function startInventory() {
+  const name = document.getElementById('inventoryEventName').value.trim() || '棚卸し';
+  google.script.run.withSuccessHandler(r => { if (r.success) { showToast('棚卸しを開始しました', 'success'); document.getElementById('inventoryEventName').value = ''; loadInventoryPage(); loadData(); } else showToast(r.message || 'エラー', 'error'); }).withFailureHandler(e => showToast('エラー: ' + e.message, 'error')).startInventoryEvent(name);
+}
+function markInventoryChecked() {
+  const assetId = document.getElementById('inventoryAssetId').value.trim();
+  const slackUrl = document.getElementById('inventorySlackUrl').value.trim();
+  if (!assetId) { showToast('資産番号を入力してください', 'info'); return; }
+  google.script.run.withSuccessHandler(r => { if (r.success) { showToast('確認済みにしました', 'success'); document.getElementById('inventoryAssetId').value = ''; document.getElementById('inventorySlackUrl').value = ''; loadInventoryPage(); loadData(); } else showToast('資産が見つかりません', 'error'); }).withFailureHandler(e => showToast('エラー: ' + e.message, 'error')).markAssetInventoryChecked(assetId, slackUrl || undefined);
+}
+
 // ===== CSV出力 =====
 function exportCSV() {
   showLoading();
@@ -769,7 +844,7 @@ function downloadTemplate() {
   const bom = '\uFEFF';
   let headers, filename;
   if (target === 'assets') {
-    headers = ['資産番号','資産名','カテゴリ','メーカー','モデル','シリアル番号','購入日','購入金額','使用者ID','使用者名','使用者メール','部署','設置場所','ステータス','IPアドレス','MACアドレス','OS','備考'];
+    headers = ['資産番号','資産名','カテゴリ','メーカー','モデル','シリアル番号','購入日','購入金額','リース終了日','保証期限','返却予定日','使用者ID','使用者名','使用者メール','部署','設置場所','ステータス','IPアドレス','MACアドレス','OS','備考'];
     filename = 'IT資産_インポートテンプレート.csv';
   } else {
     headers = ['ユーザーID','氏名','メールアドレス','部署','役職','電話番号','在籍状況'];
@@ -817,9 +892,9 @@ function executeImport() {
 }
 
 function mapAssetImport(headers, rows) {
-  const al={'資産番号':'id','id':'id','asset_id':'id','資産名':'name','名称':'name','name':'name','カテゴリ':'category','category':'category','メーカー':'manufacturer','manufacturer':'manufacturer','モデル':'model','model':'model','シリアル番号':'serial','シリアル':'serial','serial':'serial','購入日':'purchaseDate','purchase_date':'purchaseDate','購入金額':'price','金額':'price','price':'price','使用者ID':'userId','使用者id':'userId','user_id':'userId','使用者':'userName','使用者名':'userName','user':'userName','user_name':'userName','使用者メール':'userEmail','メール':'userEmail','email':'userEmail','メールアドレス':'userEmail','user_email':'userEmail','部署':'department','department':'department','設置場所':'location','location':'location','ステータス':'status','status':'status','IPアドレス':'ip','ipアドレス':'ip','ip':'ip','IP':'ip','MACアドレス':'mac','macアドレス':'mac','mac':'mac','MAC':'mac','os':'os','OS':'os','備考':'notes','notes':'notes'};
+  const al={'資産番号':'id','id':'id','asset_id':'id','資産名':'name','名称':'name','name':'name','カテゴリ':'category','category':'category','メーカー':'manufacturer','manufacturer':'manufacturer','モデル':'model','model':'model','シリアル番号':'serial','シリアル':'serial','serial':'serial','購入日':'purchaseDate','purchase_date':'purchaseDate','購入金額':'price','金額':'price','price':'price','リース終了日':'leaseEndDate','lease_end':'leaseEndDate','保証期限':'warrantyEndDate','warranty':'warrantyEndDate','返却予定日':'returnDueDate','return_due':'returnDueDate','使用者ID':'userId','使用者id':'userId','user_id':'userId','使用者':'userName','使用者名':'userName','user':'userName','user_name':'userName','使用者メール':'userEmail','メール':'userEmail','email':'userEmail','メールアドレス':'userEmail','user_email':'userEmail','部署':'department','department':'department','設置場所':'location','location':'location','ステータス':'status','status':'status','IPアドレス':'ip','ipアドレス':'ip','ip':'ip','IP':'ip','MACアドレス':'mac','macアドレス':'mac','mac':'mac','MAC':'mac','os':'os','OS':'os','備考':'notes','notes':'notes'};
   const cm={}; headers.forEach((h,i)=>{const k=al[h]||al[h.toLowerCase()]||al[h.replace(/[\s_]/g,'')];if(k)cm[k]=i;});
-  return rows.map(r=>{const g=k=>(cm[k]!==undefined?(r[cm[k]]||''):'');return{id:g('id'),name:g('name'),category:g('category'),manufacturer:g('manufacturer'),model:g('model'),serial:g('serial'),purchaseDate:g('purchaseDate'),price:g('price'),userId:g('userId'),userName:g('userName'),userEmail:g('userEmail'),department:g('department'),location:g('location'),status:g('status'),ip:g('ip'),mac:g('mac'),os:g('os'),notes:g('notes')};});
+  return rows.map(r=>{const g=k=>(cm[k]!==undefined?(r[cm[k]]||''):'');return{id:g('id'),name:g('name'),category:g('category'),manufacturer:g('manufacturer'),model:g('model'),serial:g('serial'),purchaseDate:g('purchaseDate'),price:g('price'),leaseEndDate:g('leaseEndDate'),warrantyEndDate:g('warrantyEndDate'),returnDueDate:g('returnDueDate'),userId:g('userId'),userName:g('userName'),userEmail:g('userEmail'),department:g('department'),location:g('location'),status:g('status'),ip:g('ip'),mac:g('mac'),os:g('os'),notes:g('notes')};});
 }
 function mapUserImport(headers, rows) {
   const al={'ユーザーID':'id','ユーザーid':'id','user_id':'id','id':'id','氏名':'name','名前':'name','name':'name','メールアドレス':'email','メール':'email','email':'email','部署':'department','department':'department','役職':'title','title':'title','電話番号':'phone','電話':'phone','phone':'phone','在籍状況':'status','ステータス':'status','status':'status'};

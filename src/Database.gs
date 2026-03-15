@@ -98,13 +98,25 @@ function getDashboardData() {
   const totalCost = assets.reduce((sum, a) => sum + (Number(a.price) || 0), 0);
   const recentHistory = getHistory().slice(0, 10);
 
+  // 期限切れ間近（リース終了・保証期限の30日以内）
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const in30 = new Date(today);
+  in30.setDate(in30.getDate() + 30);
+  const expiringSoon = assets.filter(a => {
+    const lease = parseDateSafe(a.leaseEndDate);
+    const warranty = parseDateSafe(a.warrantyEndDate);
+    return (lease && lease <= in30 && lease >= today) || (warranty && warranty <= in30 && warranty >= today);
+  });
+
   return {
     total,
     statusCount,
     categoryCount,
     departmentCount,
     totalCost,
-    recentHistory
+    recentHistory,
+    expiringSoon
   };
 }
 
@@ -125,6 +137,9 @@ function addAsset(asset) {
     asset.serial || '',
     asset.purchaseDate || '',
     asset.price || '',
+    asset.leaseEndDate || '',
+    asset.warrantyEndDate || '',
+    asset.returnDueDate || '',
     asset.userId || '',
     asset.userName || '',
     asset.userEmail || '',
@@ -135,6 +150,8 @@ function addAsset(asset) {
     asset.mac || '',
     asset.os || '',
     asset.notes || '',
+    '',
+    '',
     now,
     now
   ];
@@ -189,6 +206,9 @@ function updateAsset(asset) {
     asset.serial || '',
     asset.purchaseDate || '',
     asset.price || '',
+    asset.leaseEndDate || '',
+    asset.warrantyEndDate || '',
+    asset.returnDueDate || '',
     asset.userId || '',
     asset.userName || '',
     asset.userEmail || '',
@@ -199,7 +219,9 @@ function updateAsset(asset) {
     asset.mac || '',
     asset.os || '',
     asset.notes || '',
-    oldRow[18], // 登録日はそのまま
+    oldRow[21] || '', // 棚卸し確認日はそのまま
+    oldRow[22] || '', // 棚卸しSlackURLはそのまま
+    oldRow[23], // 登録日はそのまま
     now
   ];
 
@@ -207,6 +229,22 @@ function updateAsset(asset) {
 
   if (changes.length > 0) {
     addHistoryEntry(asset.id, '更新', changes.join(' / '));
+  }
+
+  // ステータス変更時: Slack通知
+  if (oldAsset.status !== asset.status) {
+    try { notifyStatusChange(asset.id, asset.name, oldAsset.status, asset.status, asset.userName, asset.userEmail); } catch (e) {}
+  }
+
+  // 使用者変更時: 貸出履歴に記録（新使用者がいる場合は貸出、前の使用者名を「貸出元」に）
+  if (oldAsset.userName !== asset.userName && asset.userName) {
+    addLendingRecord(asset.id, asset.userId, asset.userName, asset.userEmail, oldAsset.userName || '', '');
+  }
+  // 使用者が外れた場合: 未返却の貸出履歴があれば返却日を記入
+  if (oldAsset.userName && !asset.userName) {
+    const list = getLendingHistory(asset.id);
+    const openRecord = list.find(h => !h.returnedAt);
+    if (openRecord) closeLendingRecord(openRecord.historyId);
   }
 
   return { success: true };
@@ -313,9 +351,11 @@ function exportAssets() {
   assets.forEach(a => {
     rows.push([
       a.id, a.name, a.category, a.manufacturer, a.model, a.serial,
-      a.purchaseDate, a.price, a.userId, a.userName, a.userEmail,
-      a.department, a.location, a.status,
-      a.ip, a.mac, a.os, a.notes, a.createdDate, a.updatedDate
+      a.purchaseDate, a.price, a.leaseEndDate, a.warrantyEndDate, a.returnDueDate,
+      a.userId, a.userName, a.userEmail, a.department, a.location, a.status,
+      a.ip, a.mac, a.os, a.notes,
+      a.inventoryCheckedDate, a.inventorySlackUrl,
+      a.createdDate, a.updatedDate
     ]);
   });
   return rows;
@@ -331,14 +371,19 @@ function bulkUpdateStatus(assetIds, newStatus) {
   const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, ASSET_HEADERS.length).getValues();
   let updated = 0;
 
+  const statusCol = ASSET_HEADERS.indexOf('ステータス') + 1;
+  const updatedCol = ASSET_HEADERS.indexOf('更新日') + 1;
   const idSet = new Set(assetIds);
   for (let i = 0; i < data.length; i++) {
     if (idSet.has(data[i][0])) {
-      const oldStatus = data[i][13]; // ステータス列
+      const oldStatus = data[i][statusCol - 1];
       if (oldStatus !== newStatus) {
-        sheet.getRange(i + 2, 14).setValue(newStatus); // ステータス列
-        sheet.getRange(i + 2, 20).setValue(new Date()); // 更新日
+        sheet.getRange(i + 2, statusCol).setValue(newStatus);
+        sheet.getRange(i + 2, updatedCol).setValue(new Date());
         addHistoryEntry(data[i][0], 'ステータス変更', `ステータス: ${oldStatus} → ${newStatus}（一括変更）`);
+        const userNameCol = ASSET_HEADERS.indexOf('使用者名');
+        const userEmailCol = ASSET_HEADERS.indexOf('使用者メール');
+        try { notifyStatusChange(data[i][0], data[i][1], oldStatus, newStatus, data[i][userNameCol], data[i][userEmailCol]); } catch (e) {}
         updated++;
       }
     }
@@ -402,6 +447,9 @@ function importAssets(assets, skipDuplicate) {
       a.serial || '',
       a.purchaseDate || '',
       a.price || '',
+      a.leaseEndDate || '',
+      a.warrantyEndDate || '',
+      a.returnDueDate || '',
       a.userId || '',
       a.userName || '',
       a.userEmail || '',
@@ -412,13 +460,16 @@ function importAssets(assets, skipDuplicate) {
       a.mac || '',
       a.os || '',
       a.notes || '',
+      '',
+      '',
       now,
       now
     ]);
   });
 
   if (rows.length > 0) {
-    sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, ASSET_HEADERS.length).setValues(rows);
+    const startRow = sheet.getLastRow() + 1;
+    sheet.getRange(startRow, 1, rows.length, ASSET_HEADERS.length).setValues(rows);
     addHistoryEntry('IMPORT', 'インポート', `${rows.length}件の資産データをインポート`);
   }
 
@@ -465,6 +516,116 @@ function importUsers(users, skipDuplicate) {
   return { success: true, imported: rows.length, skipped: skipped };
 }
 
+// ===== 貸出履歴 =====
+
+function getLendingHistory(assetId) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEETS.LENDING);
+  if (!sheet || sheet.getLastRow() <= 1) return [];
+
+  const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, LENDING_HEADERS.length).getValues();
+  let list = data.map(row => ({
+    historyId: row[0],
+    assetId: row[1],
+    lentAt: formatDateTimeValue(row[2]),
+    returnedAt: formatDateTimeValue(row[3]),
+    lentToUserId: row[4],
+    lentToName: row[5],
+    lentToEmail: row[6],
+    lentFromName: row[7],
+    notes: row[8],
+    createdAt: formatDateTimeValue(row[9])
+  }));
+  if (assetId) list = list.filter(h => h.assetId === assetId);
+  list.sort((a, b) => (b.lentAt || '').localeCompare(a.lentAt || ''));
+  return list;
+}
+
+function addLendingRecord(assetId, lentToUserId, lentToName, lentToEmail, lentFromName, notes) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEETS.LENDING);
+  if (!sheet) return { success: false, message: '貸出履歴シートがありません' };
+  const id = Utilities.getUuid();
+  const now = new Date();
+  sheet.appendRow([id, assetId, now, '', lentToUserId || '', lentToName || '', lentToEmail || '', lentFromName || '', notes || '', now]);
+  return { success: true, id };
+}
+
+function closeLendingRecord(historyId) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEETS.LENDING);
+  if (!sheet || sheet.getLastRow() <= 1) return { success: false };
+  const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, LENDING_HEADERS.length).getValues();
+  for (let i = 0; i < data.length; i++) {
+    if (data[i][0] === historyId) {
+      sheet.getRange(i + 2, 4).setValue(new Date()); // 返却日
+      return { success: true };
+    }
+  }
+  return { success: false };
+}
+
+// ===== 棚卸し =====
+
+function getActiveInventoryEvent() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEETS.INVENTORY_EVENTS);
+  if (!sheet || sheet.getLastRow() <= 1) return null;
+  const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, INVENTORY_EVENT_HEADERS.length).getValues();
+  const active = data.find(row => row[4] === '実施中');
+  if (!active) return null;
+  return { id: active[0], name: active[1], startDate: formatDateValue(active[2]), endDate: formatDateValue(active[3]), status: active[4] };
+}
+
+function startInventoryEvent(eventName) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const evSheet = ss.getSheetByName(SHEETS.INVENTORY_EVENTS);
+  const assetSheet = ss.getSheetByName(SHEETS.ASSETS);
+  if (!evSheet) return { success: false, message: '棚卸しイベントシートがありません' };
+  const id = 'INV-' + Utilities.getUuid().slice(0, 8);
+  const now = new Date();
+  evSheet.appendRow([id, eventName || '棚卸し', now, '', '実施中', now]);
+  // 全資産の棚卸し確認フラグをクリア
+  if (assetSheet && assetSheet.getLastRow() > 1) {
+    const checkedCol = ASSET_HEADERS.indexOf('棚卸し確認日') + 1;
+    const urlCol = ASSET_HEADERS.indexOf('棚卸しSlackURL') + 1;
+    const lastRow = assetSheet.getLastRow();
+    if (checkedCol && urlCol) {
+      assetSheet.getRange(2, checkedCol, lastRow - 1, 1).clearContent();
+      assetSheet.getRange(2, urlCol, lastRow - 1, 1).clearContent();
+    }
+  }
+  return { success: true, id };
+}
+
+function markAssetInventoryChecked(assetId, slackUrl) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEETS.ASSETS);
+  if (!sheet || sheet.getLastRow() <= 1) return { success: false };
+  const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, ASSET_HEADERS.length).getValues();
+  const checkedCol = ASSET_HEADERS.indexOf('棚卸し確認日') + 1;
+  const urlCol = ASSET_HEADERS.indexOf('棚卸しSlackURL') + 1;
+  const now = new Date();
+  for (let i = 0; i < data.length; i++) {
+    if (data[i][0] === assetId) {
+      sheet.getRange(i + 2, checkedCol).setValue(now);
+      if (slackUrl) sheet.getRange(i + 2, urlCol).setValue(slackUrl);
+      return { success: true };
+    }
+  }
+  return { success: false };
+}
+
+function getUncheckedAssetsForInventory() {
+  const assets = getAssets();
+  const active = getActiveInventoryEvent();
+  if (!active) return { list: [], event: null };
+  return {
+    event: active,
+    list: assets.filter(a => !a.inventoryCheckedDate || a.inventoryCheckedDate === '')
+  };
+}
+
 // ===== ユーティリティ =====
 
 function rowToAssetObject(row) {
@@ -477,18 +638,23 @@ function rowToAssetObject(row) {
     serial: row[5],
     purchaseDate: formatDateValue(row[6]),
     price: row[7],
-    userId: row[8],
-    userName: row[9],
-    userEmail: row[10],
-    department: row[11],
-    location: row[12],
-    status: row[13],
-    ip: row[14],
-    mac: row[15],
-    os: row[16],
-    notes: row[17],
-    createdDate: formatDateValue(row[18]),
-    updatedDate: formatDateValue(row[19])
+    leaseEndDate: formatDateValue(row[8]),
+    warrantyEndDate: formatDateValue(row[9]),
+    returnDueDate: formatDateValue(row[10]),
+    userId: row[11],
+    userName: row[12],
+    userEmail: row[13],
+    department: row[14],
+    location: row[15],
+    status: row[16],
+    ip: row[17],
+    mac: row[18],
+    os: row[19],
+    notes: row[20],
+    inventoryCheckedDate: formatDateValue(row[21]),
+    inventorySlackUrl: row[22],
+    createdDate: formatDateValue(row[23]),
+    updatedDate: formatDateValue(row[24])
   };
 }
 
@@ -513,4 +679,12 @@ function formatDateTimeValue(value) {
     return Utilities.formatDate(value, 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss');
   }
   return String(value);
+}
+
+/** 日付文字列またはDateをDateに変換。無効ならnull */
+function parseDateSafe(value) {
+  if (!value) return null;
+  if (value instanceof Date) return isNaN(value.getTime()) ? null : value;
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? null : d;
 }

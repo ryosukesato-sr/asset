@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>IT資産管理システム</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <?!= include('html/CSS'); ?>
+</head>
+<body>
+  <div id="app">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <div class="logo">
+          <span class="logo-text">IT資産管理</span>
+        </div>
+      </div>
+      <nav class="nav">
+        <a class="nav-item active" data-page="dashboard" onclick="navigateTo('dashboard')"><span class="nav-label">ダッシュボード</span></a>
+        <a class="nav-item" data-page="assets" onclick="navigateTo('assets')"><span class="nav-label">資産一覧</span></a>
+        <a class="nav-item" data-page="users" onclick="navigateTo('users')"><span class="nav-label">ユーザー管理</span></a>
+        <a class="nav-item" data-page="history" onclick="navigateTo('history')"><span class="nav-label">変更履歴</span></a>
+      </nav>
+    </aside>
+
+    <main class="main-content">
+      <header class="header">
+        <button class="hamburger" onclick="toggleSidebar()">&#9776;</button>
+        <h1 class="header-title" id="pageTitle">ダッシュボード</h1>
+        <div class="header-actions">
+          <button class="btn btn-primary" id="addAssetBtn" onclick="showAddModal()" style="display:none;">+ 新規登録</button>
+          <button class="btn btn-primary" id="addUserBtn" onclick="showAddUserModal()" style="display:none;">+ ユーザー追加</button>
+          <button class="btn btn-icon" onclick="toggleTheme()" title="テーマ切替"><span id="themeIcon"></span></button>
+        </div>
+      </header>
+
+      <!-- ダッシュボード -->
+      <div class="page active" id="page-dashboard">
+        <div class="dashboard-cards" id="dashboardCards"></div>
+        <div class="dashboard-grid">
+          <div class="card"><h3 class="card-title">カテゴリ別内訳</h3><div id="categoryChart"></div></div>
+          <div class="card"><h3 class="card-title">部署別内訳</h3><div id="departmentChart"></div></div>
+        </div>
+        <div class="card">
+          <h3 class="card-title">最近の変更</h3>
+          <div class="table-wrap">
+            <table class="table" id="recentHistoryTable">
+              <thead><tr><th>日時</th><th>資産番号</th><th>種別</th><th>内容</th><th>変更者</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- 資産一覧 -->
+      <div class="page" id="page-assets">
+        <div class="toolbar">
+          <div class="toolbar-left">
+            <input type="text" class="input toolbar-search" id="searchKeyword" placeholder="キーワード検索..." oninput="applyFilters()">
+            <select class="input" id="filterCategory" onchange="applyFilters()"><option value="">全カテゴリ</option></select>
+            <select class="input" id="filterDepartment" onchange="applyFilters()"><option value="">全部署</option></select>
+            <select class="input" id="filterStatus" onchange="applyFilters()"><option value="">全ステータス</option></select>
+            <button class="btn btn-secondary btn-sm" onclick="clearFilters()" title="フィルタークリア">&#10005;</button>
+          </div>
+          <div class="toolbar-right">
+            <button class="btn btn-secondary btn-sm" onclick="showAdvancedFilter()" title="高度なフィルター">詳細検索</button>
+            <button class="btn btn-secondary btn-sm" onclick="showColumnSettings()" title="列設定">列設定</button>
+            <button class="btn btn-secondary btn-sm" onclick="showDisplaySettings()" title="表示設定">表示</button>
+            <button class="btn btn-secondary btn-sm" onclick="exportCSV()">CSV出力</button>
+            <button class="btn btn-secondary btn-sm" onclick="showImportModal()">取込</button>
+          </div>
+        </div>
+
+        <div class="bulk-bar" id="bulkBar" style="display:none;">
+          <span id="bulkCount">0件選択中</span>
+          <select class="input" id="bulkStatusSelect" style="width:auto;"><option value="">ステータス一括変更...</option></select>
+          <button class="btn btn-primary btn-sm" onclick="bulkChangeStatus()">一括変更</button>
+          <button class="btn btn-danger btn-sm" onclick="bulkDelete()">一括削除</button>
+          <button class="btn btn-secondary btn-sm" onclick="clearSelection()">選択解除</button>
+        </div>
+
+        <div class="table-info">
+          <span id="assetCount">0件</span>
+          <div style="display:flex;align-items:center;gap:8px;">
+            <select class="input" id="perPageSelect" onchange="changePerPage()" style="width:auto;padding:4px 8px;font-size:11px;">
+              <option value="25">25件</option><option value="50">50件</option><option value="100">100件</option><option value="200">200件</option>
+            </select>
+            <div class="pagination" id="pagination"></div>
+          </div>
+        </div>
+
+        <div class="table-wrap" id="assetTableWrap">
+          <table class="table" id="assetTable">
+            <thead><tr id="assetTableHead"></tr></thead>
+            <tbody id="assetTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ユーザー管理 -->
+      <div class="page" id="page-users">
+        <div class="filter-bar">
+          <input type="text" class="input" id="userSearchKeyword" placeholder="名前・メール・部署で検索..." oninput="filterUsersView()">
+        </div>
+        <div class="table-wrap">
+          <table class="table" id="userTable">
+            <thead><tr><th>ユーザーID</th><th>氏名</th><th>メールアドレス</th><th>部署</th><th>役職</th><th>電話番号</th><th>在籍状況</th><th>操作</th></tr></thead>
+            <tbody id="userTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- 変更履歴 -->
+      <div class="page" id="page-history">
+        <div class="filter-bar">
+          <input type="text" class="input" id="historySearch" placeholder="資産番号で検索..." oninput="filterHistory()">
+        </div>
+        <div class="table-wrap">
+          <table class="table" id="historyTable">
+            <thead><tr><th>日時</th><th>資産番号</th><th>種別</th><th>内容</th><th>変更者</th></tr></thead>
+            <tbody id="historyTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </main>
+
+    <!-- 資産登録/編集 -->
+    <div class="modal-overlay" id="modalOverlay" onclick="closeModalOverlay(event)">
+      <div class="modal">
+        <div class="modal-header"><h2 id="modalTitle">資産登録</h2><button class="btn-close" onclick="closeModal()">&times;</button></div>
+        <form class="modal-body" id="assetForm" onsubmit="saveAsset(event)">
+          <input type="hidden" id="assetId"><input type="hidden" id="assetUserId"><input type="hidden" id="assetUserEmail">
+          <div class="form-grid">
+            <div class="form-group"><label>資産名 <span class="required">*</span></label><input type="text" class="input" id="assetName" required></div>
+            <div class="form-group"><label>カテゴリ <span class="required">*</span></label><select class="input" id="assetCategory" required></select></div>
+            <div class="form-group"><label>メーカー</label><input type="text" class="input" id="assetManufacturer"></div>
+            <div class="form-group"><label>モデル</label><input type="text" class="input" id="assetModel"></div>
+            <div class="form-group"><label>シリアル番号</label><input type="text" class="input" id="assetSerial"></div>
+            <div class="form-group"><label>購入日</label><input type="date" class="input" id="assetPurchaseDate"></div>
+            <div class="form-group"><label>購入金額（円）</label><input type="number" class="input" id="assetPrice" min="0"></div>
+            <div class="form-group"><label>ステータス</label><select class="input" id="assetStatus"></select></div>
+            <div class="form-group autocomplete-group"><label>使用者</label><input type="text" class="input" id="assetUserName" placeholder="名前またはメールで検索..." autocomplete="off"><div class="autocomplete-dropdown" id="userAutocomplete"></div></div>
+            <div class="form-group"><label>部署</label><select class="input" id="assetDepartment"></select></div>
+            <div class="form-group"><label>設置場所</label><input type="text" class="input" id="assetLocation"></div>
+            <div class="form-group"><label>OS</label><input type="text" class="input" id="assetOS"></div>
+            <div class="form-group"><label>IPアドレス</label><input type="text" class="input" id="assetIP" placeholder="192.168.1.1"></div>
+            <div class="form-group"><label>MACアドレス</label><input type="text" class="input" id="assetMAC" placeholder="AA:BB:CC:DD:EE:FF"></div>
+          </div>
+          <div class="form-group full-width"><label>備考</label><textarea class="input" id="assetNotes" rows="3"></textarea></div>
+          <div class="modal-footer"><button type="button" class="btn btn-secondary" onclick="closeModal()">キャンセル</button><button type="submit" class="btn btn-primary" id="saveBtn">保存</button></div>
+        </form>
+      </div>
+    </div>
+
+    <!-- ユーザー登録/編集 -->
+    <div class="modal-overlay" id="userModalOverlay" onclick="closeUserModalOverlay(event)">
+      <div class="modal" style="max-width:560px;">
+        <div class="modal-header"><h2 id="userModalTitle">ユーザー追加</h2><button class="btn-close" onclick="closeUserModal()">&times;</button></div>
+        <form class="modal-body" id="userForm" onsubmit="saveUser(event)">
+          <input type="hidden" id="editUserId">
+          <div class="form-grid">
+            <div class="form-group"><label>氏名 <span class="required">*</span></label><input type="text" class="input" id="editUserName" required></div>
+            <div class="form-group"><label>メールアドレス <span class="required">*</span></label><input type="email" class="input" id="editUserEmail" required></div>
+            <div class="form-group"><label>部署</label><select class="input" id="editUserDepartment"></select></div>
+            <div class="form-group"><label>役職</label><input type="text" class="input" id="editUserTitle"></div>
+            <div class="form-group"><label>電話番号</label><input type="text" class="input" id="editUserPhone"></div>
+            <div class="form-group"><label>在籍状況</label><select class="input" id="editUserStatus"><option value="在籍">在籍</option><option value="休職">休職</option><option value="退職">退職</option></select></div>
+          </div>
+          <div class="modal-footer"><button type="button" class="btn btn-secondary" onclick="closeUserModal()">キャンセル</button><button type="submit" class="btn btn-primary" id="saveUserBtn">保存</button></div>
+        </form>
+      </div>
+    </div>
+
+    <!-- 詳細 -->
+    <div class="modal-overlay" id="detailOverlay" onclick="closeDetailOverlay(event)">
+      <div class="modal modal-detail">
+        <div class="modal-header"><h2 id="detailTitle">資産詳細</h2><button class="btn-close" onclick="closeDetail()">&times;</button></div>
+        <div class="modal-body" id="detailBody"></div>
+        <div class="modal-footer"><button class="btn btn-secondary" onclick="closeDetail()">閉じる</button><button class="btn btn-primary" id="detailEditBtn">編集</button></div>
+      </div>
+    </div>
+
+    <!-- 列設定 -->
+    <div class="modal-overlay" id="colSettingsOverlay" onclick="closeColSettingsOverlay(event)">
+      <div class="modal" style="max-width:420px;">
+        <div class="modal-header"><h2>列の表示設定</h2><button class="btn-close" onclick="closeColumnSettings()">&times;</button></div>
+        <div class="modal-body">
+          <p style="font-size:12px;color:var(--text-muted);margin-bottom:12px;">表示する列をチェックし、ドラッグで並び替えできます。設定は自動保存されます。</p>
+          <div id="columnList" class="col-list"></div>
+        </div>
+        <div class="modal-footer"><button class="btn btn-secondary" onclick="resetColumnSettings()">初期値に戻す</button><button class="btn btn-primary" onclick="closeColumnSettings()">完了</button></div>
+      </div>
+    </div>
+
+    <!-- 表示設定 -->
+    <div class="modal-overlay" id="displaySettingsOverlay" onclick="closeDisplaySettingsOverlay(event)">
+      <div class="modal" style="max-width:400px;">
+        <div class="modal-header"><h2>表示設定</h2><button class="btn-close" onclick="closeDisplaySettings()">&times;</button></div>
+        <div class="modal-body">
+          <div class="form-group" style="margin-bottom:16px;">
+            <label>行の密度</label>
+            <div class="density-options">
+              <label class="density-opt"><input type="radio" name="density" value="compact" onchange="changeDensity(this.value)"> コンパクト</label>
+              <label class="density-opt"><input type="radio" name="density" value="normal" onchange="changeDensity(this.value)" checked> 通常</label>
+              <label class="density-opt"><input type="radio" name="density" value="comfortable" onchange="changeDensity(this.value)"> ゆったり</label>
+            </div>
+          </div>
+          <div class="form-group" style="margin-bottom:16px;">
+            <label>フォントサイズ</label>
+            <div class="density-options">
+              <label class="density-opt"><input type="radio" name="fontSize" value="small" onchange="changeFontSize(this.value)"> 小</label>
+              <label class="density-opt"><input type="radio" name="fontSize" value="medium" onchange="changeFontSize(this.value)" checked> 中</label>
+              <label class="density-opt"><input type="radio" name="fontSize" value="large" onchange="changeFontSize(this.value)"> 大</label>
+            </div>
+          </div>
+          <div class="form-group"><label>テーブルの縞模様</label><label class="density-opt"><input type="checkbox" id="stripedToggle" onchange="toggleStriped(this.checked)"> 有効</label></div>
+        </div>
+        <div class="modal-footer"><button class="btn btn-primary" onclick="closeDisplaySettings()">完了</button></div>
+      </div>
+    </div>
+
+    <!-- 高度なフィルター -->
+    <div class="modal-overlay" id="advFilterOverlay" onclick="closeAdvFilterOverlay(event)">
+      <div class="modal" style="max-width:700px;">
+        <div class="modal-header"><h2>高度なフィルター</h2><button class="btn-close" onclick="closeAdvancedFilter()">&times;</button></div>
+        <div class="modal-body">
+          <div id="advFilterConditions"></div>
+          <button class="btn btn-secondary btn-sm" onclick="addFilterCondition()" style="margin-top:8px;">+ 条件を追加</button>
+          <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border);display:flex;gap:8px;align-items:center;">
+            <label style="font-size:12px;color:var(--text-secondary);">条件の組合せ:</label>
+            <label class="density-opt"><input type="radio" name="advLogic" value="AND" checked> AND（すべて一致）</label>
+            <label class="density-opt"><input type="radio" name="advLogic" value="OR"> OR（いずれか一致）</label>
+          </div>
+          <div style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border);">
+            <label style="font-size:12px;color:var(--text-secondary);display:block;margin-bottom:6px;">プリセット</label>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+              <select class="input" id="presetSelect" style="width:auto;flex:1;" onchange="loadPreset()"><option value="">保存済みプリセット...</option></select>
+              <button class="btn btn-secondary btn-sm" onclick="savePreset()">保存</button>
+              <button class="btn btn-secondary btn-sm" onclick="deletePreset()">削除</button>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer"><button class="btn btn-secondary" onclick="clearAdvancedFilter()">クリア</button><button class="btn btn-primary" onclick="applyAdvancedFilter()">フィルター適用</button></div>
+      </div>
+    </div>
+
+    <!-- インポート -->
+    <div class="modal-overlay" id="importOverlay" onclick="closeImportOverlay(event)">
+      <div class="modal" style="max-width:640px;">
+        <div class="modal-header"><h2>CSVインポート</h2><button class="btn-close" onclick="closeImportModal()">&times;</button></div>
+        <div class="modal-body">
+          <p style="font-size:13px;color:var(--text-secondary);margin-bottom:12px;">CSVファイルから一括インポートします。1行目はヘッダー行として扱います。</p>
+          <div style="margin-bottom:16px;">
+            <label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">対象</label>
+            <select class="input" id="importTarget" style="width:auto;" onchange="updateTemplateLink()">
+              <option value="assets">資産データ</option><option value="users">ユーザーデータ</option>
+            </select>
+          </div>
+          <div style="margin-bottom:16px;">
+            <label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:6px;">テンプレート</label>
+            <button class="btn btn-secondary btn-sm" onclick="downloadTemplate()">テンプレートCSVをダウンロード</button>
+            <span style="font-size:11px;color:var(--text-muted);margin-left:8px;">ヘッダー行のみのCSVファイルです</span>
+          </div>
+          <div style="margin-bottom:16px;">
+            <label style="font-size:12px;font-weight:500;color:var(--text-secondary);display:block;margin-bottom:4px;">CSVファイル</label>
+            <input type="file" id="importFile" accept=".csv,.tsv,.txt" class="input" style="padding:6px;">
+          </div>
+          <div style="margin-bottom:16px;"><label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text-secondary);cursor:pointer;"><input type="checkbox" id="importSkipDuplicate" checked> 既存IDと重複する行はスキップ</label></div>
+          <div id="importPreview" style="display:none;">
+            <h4 style="font-size:13px;color:var(--text-secondary);margin-bottom:8px;">プレビュー（先頭5件）</h4>
+            <div class="table-wrap" style="max-height:200px;overflow:auto;"><table class="table" id="importPreviewTable"><thead><tr></tr></thead><tbody></tbody></table></div>
+            <p id="importRowCount" style="font-size:12px;color:var(--text-muted);margin-top:8px;"></p>
+          </div>
+        </div>
+        <div class="modal-footer"><button type="button" class="btn btn-secondary" onclick="closeImportModal()">キャンセル</button><button type="button" class="btn btn-primary" id="importBtn" onclick="executeImport()" disabled>インポート実行</button></div>
+      </div>
+    </div>
+
+    <div class="loading-overlay" id="loadingOverlay"><div class="spinner"></div></div>
+    <div id="toastContainer"></div>
+  </div>
+
+  <?!= include('html/JavaScript'); ?>
+</body>
+</html>

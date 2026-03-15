@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+
+# IDE / Editor
+.idea/
+.vscode/
+.claude/
+*.swp
+*.swo
+
+# Local config (optional: 認証情報を含む場合は .clasp.json を追加)
+# .clasp.json
+
+# Logs
+*.log

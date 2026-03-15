@@ -1,0 +1,837 @@
+<script>
+// ===== 列定義 =====
+const ALL_COLUMNS = [
+  { key: 'id', label: '資産番号' },
+  { key: 'name', label: '資産名' },
+  { key: 'category', label: 'カテゴリ' },
+  { key: 'manufacturer', label: 'メーカー' },
+  { key: 'model', label: 'モデル' },
+  { key: 'serial', label: 'シリアル番号' },
+  { key: 'purchaseDate', label: '購入日' },
+  { key: 'price', label: '購入金額' },
+  { key: 'userName', label: '使用者' },
+  { key: 'userEmail', label: 'メール' },
+  { key: 'department', label: '部署' },
+  { key: 'location', label: '設置場所' },
+  { key: 'status', label: 'ステータス' },
+  { key: 'ip', label: 'IPアドレス' },
+  { key: 'mac', label: 'MACアドレス' },
+  { key: 'os', label: 'OS' },
+  { key: 'notes', label: '備考' },
+  { key: 'createdDate', label: '登録日' },
+  { key: 'updatedDate', label: '更新日' }
+];
+
+const DEFAULT_VISIBLE = ['id','name','category','manufacturer','userName','userEmail','department','status','purchaseDate'];
+
+const STATUS_OPTIONS = ['利用中','在庫','受取待ち','返却待ち','回収連絡済み','回収済み','リース終了','紛失','保管'];
+
+const FILTER_FIELDS = ALL_COLUMNS.map(c => ({ key: c.key, label: c.label }));
+const FILTER_OPS = [
+  { key: 'contains', label: '含む' },
+  { key: 'not_contains', label: '含まない' },
+  { key: 'equals', label: '一致' },
+  { key: 'not_equals', label: '不一致' },
+  { key: 'starts_with', label: '前方一致' },
+  { key: 'is_empty', label: '空' },
+  { key: 'is_not_empty', label: '空でない' }
+];
+
+const CHART_COLORS = ['#3b82f6','#22c55e','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#ec4899','#f97316','#14b8a6','#6366f1'];
+
+// ===== State =====
+const state = {
+  currentPage: 'dashboard',
+  assets: [], categories: [], departments: [], users: [], historyData: [],
+  dashboardData: null,
+  filters: { keyword: '', category: '', department: '', status: '' },
+  advancedFilters: [], advancedLogic: 'AND', advancedActive: false,
+  sort: { field: 'id', direction: 'desc' },
+  pagination: { page: 1, perPage: 25 },
+  selectedIds: new Set(),
+  columns: [], // { key, label, visible }
+  displaySettings: { density: 'normal', fontSize: 'medium', striped: false },
+  presets: [],
+  editingAsset: null, theme: 'dark', acIndex: -1
+};
+
+// ===== 初期化 =====
+document.addEventListener('DOMContentLoaded', () => {
+  loadSettings();
+  initTheme();
+  applyDisplaySettings();
+  populateStatusDropdowns();
+  loadData();
+});
+
+function loadSettings() {
+  try {
+    const cols = localStorage.getItem('asset-columns');
+    if (cols) {
+      state.columns = JSON.parse(cols);
+      // 新しい列が追加された場合にマージ
+      ALL_COLUMNS.forEach(c => {
+        if (!state.columns.find(sc => sc.key === c.key)) {
+          state.columns.push({ key: c.key, label: c.label, visible: false });
+        }
+      });
+    } else {
+      resetColumnsToDefault();
+    }
+    const ds = localStorage.getItem('asset-display');
+    if (ds) state.displaySettings = JSON.parse(ds);
+    const pp = localStorage.getItem('asset-perPage');
+    if (pp) state.pagination.perPage = parseInt(pp) || 25;
+    const pr = localStorage.getItem('asset-presets');
+    if (pr) state.presets = JSON.parse(pr);
+  } catch (e) {}
+}
+
+function saveSettings() {
+  try {
+    localStorage.setItem('asset-columns', JSON.stringify(state.columns));
+    localStorage.setItem('asset-display', JSON.stringify(state.displaySettings));
+    localStorage.setItem('asset-perPage', String(state.pagination.perPage));
+    localStorage.setItem('asset-presets', JSON.stringify(state.presets));
+  } catch (e) {}
+}
+
+function resetColumnsToDefault() {
+  state.columns = ALL_COLUMNS.map(c => ({
+    key: c.key, label: c.label, visible: DEFAULT_VISIBLE.includes(c.key)
+  }));
+}
+
+function getVisibleColumns() {
+  return state.columns.filter(c => c.visible);
+}
+
+// ===== テーマ =====
+function initTheme() {
+  try { const s = localStorage.getItem('asset-theme'); if (s) state.theme = s; } catch(e) {}
+  applyTheme();
+}
+function applyTheme() {
+  document.documentElement.setAttribute('data-theme', state.theme);
+  const i = document.getElementById('themeIcon');
+  if (i) i.textContent = state.theme === 'dark' ? 'Light' : 'Dark';
+}
+function toggleTheme() {
+  state.theme = state.theme === 'dark' ? 'light' : 'dark';
+  try { localStorage.setItem('asset-theme', state.theme); } catch(e) {}
+  applyTheme();
+}
+
+// ===== 表示設定 =====
+function applyDisplaySettings() {
+  const wrap = document.getElementById('assetTableWrap');
+  if (!wrap) return;
+  wrap.className = 'table-wrap';
+  wrap.classList.add('density-' + state.displaySettings.density);
+  wrap.classList.add('font-' + state.displaySettings.fontSize);
+  if (state.displaySettings.striped) wrap.classList.add('striped');
+
+  const pp = document.getElementById('perPageSelect');
+  if (pp) pp.value = String(state.pagination.perPage);
+}
+
+function changeDensity(v) { state.displaySettings.density = v; applyDisplaySettings(); saveSettings(); }
+function changeFontSize(v) { state.displaySettings.fontSize = v; applyDisplaySettings(); saveSettings(); }
+function toggleStriped(v) { state.displaySettings.striped = v; applyDisplaySettings(); saveSettings(); }
+function changePerPage() {
+  state.pagination.perPage = parseInt(document.getElementById('perPageSelect').value) || 25;
+  state.pagination.page = 1;
+  saveSettings();
+  renderAssetTable();
+}
+
+function showDisplaySettings() {
+  document.querySelector(`input[name="density"][value="${state.displaySettings.density}"]`).checked = true;
+  document.querySelector(`input[name="fontSize"][value="${state.displaySettings.fontSize}"]`).checked = true;
+  document.getElementById('stripedToggle').checked = state.displaySettings.striped;
+  document.getElementById('displaySettingsOverlay').classList.add('open');
+}
+function closeDisplaySettings() { document.getElementById('displaySettingsOverlay').classList.remove('open'); }
+function closeDisplaySettingsOverlay(e) { if (e.target === e.currentTarget) closeDisplaySettings(); }
+
+// ===== ステータス =====
+function populateStatusDropdowns() {
+  const fs = document.getElementById('filterStatus');
+  if (fs) fs.innerHTML = '<option value="">全ステータス</option>' + STATUS_OPTIONS.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+  const as = document.getElementById('assetStatus');
+  if (as) as.innerHTML = STATUS_OPTIONS.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+  const bs = document.getElementById('bulkStatusSelect');
+  if (bs) bs.innerHTML = '<option value="">ステータス一括変更...</option>' + STATUS_OPTIONS.map(s => `<option value="${esc(s)}">${esc(s)}</option>`).join('');
+}
+
+// ===== データ読み込み =====
+function loadData() {
+  showLoading();
+  let n = 0; const t = 5;
+  const d = () => { n++; if (n >= t) { hideLoading(); renderCurrentPage(); } };
+  google.script.run.withSuccessHandler(r => { state.assets = r || []; d(); }).withFailureHandler(() => d()).getAssets();
+  google.script.run.withSuccessHandler(r => { state.categories = r || []; populateCategoryDropdowns(); d(); }).withFailureHandler(() => d()).getCategories();
+  google.script.run.withSuccessHandler(r => { state.departments = r || []; populateDepartmentDropdowns(); d(); }).withFailureHandler(() => d()).getDepartments();
+  google.script.run.withSuccessHandler(r => { state.users = r || []; d(); }).withFailureHandler(() => d()).getUsers();
+  google.script.run.withSuccessHandler(r => { state.dashboardData = r; d(); }).withFailureHandler(() => d()).getDashboardData();
+}
+
+function loadHistory() {
+  showLoading();
+  google.script.run.withSuccessHandler(r => { state.historyData = r || []; hideLoading(); renderHistory(); }).withFailureHandler(() => hideLoading()).getHistory(null);
+}
+
+function populateCategoryDropdowns() {
+  const o = state.categories.map(c => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join('');
+  const f = document.getElementById('filterCategory'); if (f) f.innerHTML = '<option value="">全カテゴリ</option>' + o;
+  const a = document.getElementById('assetCategory'); if (a) a.innerHTML = '<option value="">選択してください</option>' + o;
+}
+
+function populateDepartmentDropdowns() {
+  const o = state.departments.map(d => `<option value="${esc(d.name)}">${esc(d.name)}</option>`).join('');
+  const f = document.getElementById('filterDepartment'); if (f) f.innerHTML = '<option value="">全部署</option>' + o;
+  const a = document.getElementById('assetDepartment'); if (a) a.innerHTML = '<option value="">選択してください</option>' + o;
+  const u = document.getElementById('editUserDepartment'); if (u) u.innerHTML = '<option value="">選択してください</option>' + o;
+}
+
+// ===== ナビゲーション =====
+function navigateTo(page) {
+  state.currentPage = page;
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  const pe = document.getElementById('page-' + page); if (pe) pe.classList.add('active');
+  const ne = document.querySelector(`[data-page="${page}"]`); if (ne) ne.classList.add('active');
+  const titles = { dashboard:'ダッシュボード', assets:'資産一覧', users:'ユーザー管理', history:'変更履歴' };
+  document.getElementById('pageTitle').textContent = titles[page] || '';
+  document.getElementById('addAssetBtn').style.display = page === 'assets' ? 'inline-flex' : 'none';
+  document.getElementById('addUserBtn').style.display = page === 'users' ? 'inline-flex' : 'none';
+  renderCurrentPage();
+  if (window.innerWidth <= 768) document.getElementById('sidebar').classList.remove('open');
+}
+
+function renderCurrentPage() {
+  switch (state.currentPage) {
+    case 'dashboard': renderDashboard(); break;
+    case 'assets': renderAssetTable(); break;
+    case 'users': renderUsersTable(); break;
+    case 'history': state.historyData.length === 0 ? loadHistory() : renderHistory(); break;
+  }
+}
+
+function toggleSidebar() { document.getElementById('sidebar').classList.toggle('open'); }
+
+// ===== ダッシュボード =====
+function renderDashboard() {
+  const d = state.dashboardData; if (!d) return;
+  const ss = { '利用中':'success','在庫':'accent','受取待ち':'info','返却待ち':'warning','回収連絡済み':'orange','回収済み':'purple','リース終了':'','紛失':'danger','保管':'teal' };
+  let h = `<div class="stat-card accent"><div class="stat-label">総資産数</div><div class="stat-value">${d.total}</div><div class="stat-sub">総額 ${fmtCur(d.totalCost)}</div></div>`;
+  STATUS_OPTIONS.forEach(s => { const c = d.statusCount[s]||0; if(c>0) h += `<div class="stat-card ${ss[s]||''}"><div class="stat-label">${esc(s)}</div><div class="stat-value">${c}</div><div class="stat-sub">${pct(c,d.total)}</div></div>`; });
+  document.getElementById('dashboardCards').innerHTML = h;
+  renderBarChart('categoryChart', d.categoryCount); renderBarChart('departmentChart', d.departmentCount);
+  const tb = document.querySelector('#recentHistoryTable tbody');
+  tb.innerHTML = (d.recentHistory && d.recentHistory.length > 0) ? d.recentHistory.map(h => `<tr><td>${esc(h.dateTime)}</td><td>${esc(h.assetId)}</td><td><span class="badge badge-${esc(h.changeType)}">${esc(h.changeType)}</span></td><td>${esc(h.changeDescription)}</td><td>${esc(h.changedBy)}</td></tr>`).join('') : '<tr><td colspan="5" style="text-align:center;color:var(--text-muted);">データなし</td></tr>';
+}
+
+function renderBarChart(id, data) {
+  const c = document.getElementById(id); if (!c || !data) return;
+  const e = Object.entries(data).sort((a,b) => b[1]-a[1]); const m = e.length > 0 ? e[0][1] : 1;
+  c.innerHTML = '<div class="bar-chart">' + e.map(([l,v],i) => `<div class="bar-row"><span class="bar-label">${esc(l)}</span><div class="bar-track"><div class="bar-fill" style="width:${Math.max(v/m*100,2)}%;background:${CHART_COLORS[i%CHART_COLORS.length]};"></div></div><span class="bar-value">${v}</span></div>`).join('') + '</div>';
+}
+
+// ===== 資産一覧（動的列） =====
+function renderAssetTable() {
+  const visCols = getVisibleColumns();
+  const colCount = visCols.length + 2; // checkbox + 操作
+
+  // ヘッダー描画
+  const thead = document.getElementById('assetTableHead');
+  thead.innerHTML = '<th class="cb-col"><input type="checkbox" id="selectAll" onchange="toggleSelectAll(this.checked)"></th>' +
+    visCols.map(c => `<th class="sortable" onclick="sortBy('${c.key}')">${esc(c.label)}</th>`).join('') +
+    '<th>操作</th>';
+
+  // ソート表示
+  thead.querySelectorAll('th.sortable').forEach(th => th.classList.remove('sort-asc','sort-desc'));
+  const sTh = thead.querySelector(`th[onclick="sortBy('${state.sort.field}')"]`);
+  if (sTh) sTh.classList.add('sort-' + state.sort.direction);
+
+  const filtered = getFilteredAssets();
+  const sorted = getSortedAssets(filtered);
+  const { page, perPage } = state.pagination;
+  const start = (page - 1) * perPage;
+  const pageData = sorted.slice(start, start + perPage);
+
+  document.getElementById('assetCount').textContent = `${filtered.length}件`;
+
+  const tbody = document.getElementById('assetTableBody');
+  if (pageData.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="${colCount}" style="text-align:center;color:var(--text-muted);padding:40px;">データがありません</td></tr>`;
+  } else {
+    tbody.innerHTML = pageData.map(a => {
+      const checked = state.selectedIds.has(a.id) ? 'checked' : '';
+      return `<tr onclick="showDetail('${esc(a.id)}')" class="${checked ? 'row-selected' : ''}">
+        <td class="cb-col" onclick="event.stopPropagation()"><input type="checkbox" ${checked} onchange="toggleSelect('${esc(a.id)}', this.checked)"></td>
+        ${visCols.map(c => renderCell(a, c.key)).join('')}
+        <td class="action-btns" onclick="event.stopPropagation()">
+          <button class="btn btn-sm btn-secondary" onclick="showEditModal('${esc(a.id)}')">編集</button>
+          <button class="btn btn-sm btn-danger" onclick="confirmDelete('${esc(a.id)}')">削除</button>
+        </td></tr>`;
+    }).join('');
+  }
+
+  renderPagination(filtered.length);
+  updateBulkBar();
+  applyDisplaySettings();
+}
+
+function renderCell(asset, key) {
+  const val = asset[key];
+  if (key === 'status') return `<td><span class="badge badge-${esc(val)}">${esc(val)}</span></td>`;
+  if (key === 'price') return `<td>${fmtCur(val)}</td>`;
+  if (key === 'userEmail') return `<td style="font-size:11px;">${esc(val)}</td>`;
+  return `<td title="${esc(val)}">${esc(val)}</td>`;
+}
+
+// ===== フィルター =====
+function getFilteredAssets() {
+  let result = state.assets;
+
+  // 通常フィルター
+  const { keyword, category, department, status } = state.filters;
+  if (keyword || category || department || status) {
+    result = result.filter(a => {
+      if (keyword) { const kw = keyword.toLowerCase(); if (![a.id,a.name,a.manufacturer,a.model,a.serial,a.userName,a.userEmail,a.ip,a.mac,a.os,a.notes,a.department,a.location].join(' ').toLowerCase().includes(kw)) return false; }
+      if (category && a.category !== category) return false;
+      if (department && a.department !== department) return false;
+      if (status && a.status !== status) return false;
+      return true;
+    });
+  }
+
+  // 高度なフィルター
+  if (state.advancedActive && state.advancedFilters.length > 0) {
+    result = result.filter(a => {
+      const results = state.advancedFilters.map(f => evalCondition(a, f));
+      return state.advancedLogic === 'AND' ? results.every(Boolean) : results.some(Boolean);
+    });
+  }
+
+  return result;
+}
+
+function evalCondition(asset, cond) {
+  const val = String(asset[cond.field] || '').toLowerCase();
+  const cv = (cond.value || '').toLowerCase();
+  switch (cond.operator) {
+    case 'contains': return val.includes(cv);
+    case 'not_contains': return !val.includes(cv);
+    case 'equals': return val === cv;
+    case 'not_equals': return val !== cv;
+    case 'starts_with': return val.startsWith(cv);
+    case 'is_empty': return val === '';
+    case 'is_not_empty': return val !== '';
+    default: return true;
+  }
+}
+
+function getSortedAssets(assets) {
+  const { field, direction } = state.sort;
+  return [...assets].sort((a,b) => {
+    let va = a[field]||'', vb = b[field]||'';
+    if (field === 'price') { va = Number(va)||0; vb = Number(vb)||0; }
+    if (va < vb) return direction === 'asc' ? -1 : 1;
+    if (va > vb) return direction === 'asc' ? 1 : -1;
+    return 0;
+  });
+}
+
+function sortBy(field) {
+  if (state.sort.field === field) state.sort.direction = state.sort.direction === 'asc' ? 'desc' : 'asc';
+  else { state.sort.field = field; state.sort.direction = 'asc'; }
+  state.pagination.page = 1; renderAssetTable();
+}
+
+function applyFilters() {
+  state.filters.keyword = document.getElementById('searchKeyword').value;
+  state.filters.category = document.getElementById('filterCategory').value;
+  state.filters.department = document.getElementById('filterDepartment').value;
+  state.filters.status = document.getElementById('filterStatus').value;
+  state.pagination.page = 1; renderAssetTable();
+}
+
+function clearFilters() {
+  document.getElementById('searchKeyword').value = '';
+  document.getElementById('filterCategory').value = '';
+  document.getElementById('filterDepartment').value = '';
+  document.getElementById('filterStatus').value = '';
+  state.filters = { keyword:'', category:'', department:'', status:'' };
+  state.advancedActive = false; state.advancedFilters = [];
+  state.pagination.page = 1; renderAssetTable();
+}
+
+function renderPagination(total) {
+  const { page, perPage } = state.pagination;
+  const tp = Math.ceil(total / perPage);
+  const c = document.getElementById('pagination');
+  if (tp <= 1) { c.innerHTML = ''; return; }
+  let h = `<button ${page<=1?'disabled':''} onclick="goPage(${page-1})">&lt;</button>`;
+  for (let i = 1; i <= tp; i++) {
+    if (tp > 7) { if (i===1||i===tp||(i>=page-1&&i<=page+1)) h += `<button class="${i===page?'active':''}" onclick="goPage(${i})">${i}</button>`; else if (i===page-2||i===page+2) h += '<button disabled>...</button>'; }
+    else h += `<button class="${i===page?'active':''}" onclick="goPage(${i})">${i}</button>`;
+  }
+  h += `<button ${page>=tp?'disabled':''} onclick="goPage(${page+1})">&gt;</button>`;
+  c.innerHTML = h;
+}
+
+function goPage(p) { state.pagination.page = p; renderAssetTable(); document.getElementById('page-assets').scrollTop = 0; }
+
+// ===== 一括選択 =====
+function toggleSelect(id, checked) {
+  if (checked) state.selectedIds.add(id); else state.selectedIds.delete(id);
+  updateBulkBar();
+  // 行のハイライト
+  renderAssetTable();
+}
+
+function toggleSelectAll(checked) {
+  const filtered = getFilteredAssets();
+  const sorted = getSortedAssets(filtered);
+  const { page, perPage } = state.pagination;
+  const pageData = sorted.slice((page-1)*perPage, page*perPage);
+  pageData.forEach(a => { if (checked) state.selectedIds.add(a.id); else state.selectedIds.delete(a.id); });
+  renderAssetTable();
+}
+
+function clearSelection() {
+  state.selectedIds.clear();
+  renderAssetTable();
+}
+
+function updateBulkBar() {
+  const bar = document.getElementById('bulkBar');
+  const count = state.selectedIds.size;
+  bar.style.display = count > 0 ? 'flex' : 'none';
+  document.getElementById('bulkCount').textContent = `${count}件選択中`;
+}
+
+function bulkChangeStatus() {
+  const newStatus = document.getElementById('bulkStatusSelect').value;
+  if (!newStatus) { showToast('変更先のステータスを選択してください', 'info'); return; }
+  const ids = [...state.selectedIds];
+  if (!confirm(`${ids.length}件の資産のステータスを「${newStatus}」に変更しますか？`)) return;
+  showLoading();
+  google.script.run.withSuccessHandler(r => {
+    hideLoading();
+    if (r.success) { showToast(`${r.updated}件のステータスを変更しました`, 'success'); state.selectedIds.clear(); loadData(); }
+    else showToast(r.message || 'エラー', 'error');
+  }).withFailureHandler(e => { hideLoading(); showToast('エラー: ' + e.message, 'error'); }).bulkUpdateStatus(ids, newStatus);
+}
+
+function bulkDelete() {
+  const ids = [...state.selectedIds];
+  if (!confirm(`${ids.length}件の資産を削除しますか？この操作は取り消せません。`)) return;
+  showLoading();
+  google.script.run.withSuccessHandler(r => {
+    hideLoading();
+    if (r.success) { showToast(`${r.deleted}件を削除しました`, 'success'); state.selectedIds.clear(); loadData(); }
+    else showToast(r.message || 'エラー', 'error');
+  }).withFailureHandler(e => { hideLoading(); showToast('エラー: ' + e.message, 'error'); }).bulkDeleteAssets(ids);
+}
+
+// ===== 列設定 =====
+function showColumnSettings() {
+  renderColumnList();
+  document.getElementById('colSettingsOverlay').classList.add('open');
+}
+function closeColumnSettings() { document.getElementById('colSettingsOverlay').classList.remove('open'); saveSettings(); renderAssetTable(); }
+function closeColSettingsOverlay(e) { if (e.target === e.currentTarget) closeColumnSettings(); }
+
+function resetColumnSettings() {
+  resetColumnsToDefault(); renderColumnList(); saveSettings(); renderAssetTable();
+}
+
+function renderColumnList() {
+  const list = document.getElementById('columnList');
+  list.innerHTML = state.columns.map((c, i) => `
+    <div class="col-item" draggable="true" data-idx="${i}">
+      <span class="col-drag">=</span>
+      <label><input type="checkbox" ${c.visible ? 'checked' : ''} onchange="toggleColumn(${i}, this.checked)"> ${esc(c.label)}</label>
+    </div>
+  `).join('');
+
+  // ドラッグ&ドロップ
+  let dragIdx = null;
+  list.querySelectorAll('.col-item').forEach(el => {
+    el.addEventListener('dragstart', e => { dragIdx = parseInt(el.dataset.idx); el.classList.add('dragging'); });
+    el.addEventListener('dragend', () => { el.classList.remove('dragging'); });
+    el.addEventListener('dragover', e => { e.preventDefault(); });
+    el.addEventListener('drop', e => {
+      e.preventDefault();
+      const dropIdx = parseInt(el.dataset.idx);
+      if (dragIdx !== null && dragIdx !== dropIdx) {
+        const item = state.columns.splice(dragIdx, 1)[0];
+        state.columns.splice(dropIdx, 0, item);
+        renderColumnList();
+        saveSettings();
+      }
+    });
+  });
+}
+
+function toggleColumn(idx, visible) {
+  state.columns[idx].visible = visible;
+  saveSettings();
+}
+
+// ===== 高度なフィルター =====
+function showAdvancedFilter() {
+  renderAdvFilterConditions();
+  populatePresetSelect();
+  document.getElementById('advFilterOverlay').classList.add('open');
+}
+function closeAdvancedFilter() { document.getElementById('advFilterOverlay').classList.remove('open'); }
+function closeAdvFilterOverlay(e) { if (e.target === e.currentTarget) closeAdvancedFilter(); }
+
+function addFilterCondition() {
+  state.advancedFilters.push({ field: 'name', operator: 'contains', value: '' });
+  renderAdvFilterConditions();
+}
+
+function removeFilterCondition(idx) {
+  state.advancedFilters.splice(idx, 1);
+  renderAdvFilterConditions();
+}
+
+function renderAdvFilterConditions() {
+  const c = document.getElementById('advFilterConditions');
+  if (state.advancedFilters.length === 0) {
+    c.innerHTML = '<p style="font-size:13px;color:var(--text-muted);">条件がありません。「条件を追加」をクリックしてください。</p>';
+    return;
+  }
+  c.innerHTML = state.advancedFilters.map((f, i) => `
+    <div class="adv-condition">
+      <select class="input" onchange="updateAdvFilter(${i},'field',this.value)">
+        ${FILTER_FIELDS.map(ff => `<option value="${ff.key}" ${f.field===ff.key?'selected':''}>${esc(ff.label)}</option>`).join('')}
+      </select>
+      <select class="input" style="max-width:130px;" onchange="updateAdvFilter(${i},'operator',this.value)">
+        ${FILTER_OPS.map(op => `<option value="${op.key}" ${f.operator===op.key?'selected':''}>${esc(op.label)}</option>`).join('')}
+      </select>
+      <input type="text" class="input" value="${esc(f.value)}" placeholder="値..." oninput="updateAdvFilter(${i},'value',this.value)"
+        style="${f.operator==='is_empty'||f.operator==='is_not_empty'?'display:none':''}">
+      <button class="adv-remove" onclick="removeFilterCondition(${i})">&times;</button>
+    </div>
+  `).join('');
+}
+
+function updateAdvFilter(idx, prop, val) {
+  state.advancedFilters[idx][prop] = val;
+  if (prop === 'operator') renderAdvFilterConditions(); // 空/空でないの時にvalue非表示切替
+}
+
+function applyAdvancedFilter() {
+  state.advancedLogic = document.querySelector('input[name="advLogic"]:checked')?.value || 'AND';
+  state.advancedActive = state.advancedFilters.length > 0;
+  state.pagination.page = 1;
+  closeAdvancedFilter();
+  renderAssetTable();
+}
+
+function clearAdvancedFilter() {
+  state.advancedFilters = [];
+  state.advancedActive = false;
+  renderAdvFilterConditions();
+  state.pagination.page = 1;
+  renderAssetTable();
+}
+
+// ===== プリセット =====
+function populatePresetSelect() {
+  const sel = document.getElementById('presetSelect');
+  sel.innerHTML = '<option value="">保存済みプリセット...</option>' +
+    state.presets.map((p, i) => `<option value="${i}">${esc(p.name)}</option>`).join('');
+}
+
+function savePreset() {
+  const name = prompt('プリセット名を入力してください:');
+  if (!name) return;
+  state.presets.push({
+    name: name,
+    conditions: JSON.parse(JSON.stringify(state.advancedFilters)),
+    logic: document.querySelector('input[name="advLogic"]:checked')?.value || 'AND'
+  });
+  saveSettings();
+  populatePresetSelect();
+  showToast(`プリセット「${name}」を保存しました`, 'success');
+}
+
+function loadPreset() {
+  const idx = document.getElementById('presetSelect').value;
+  if (idx === '') return;
+  const preset = state.presets[parseInt(idx)];
+  if (!preset) return;
+  state.advancedFilters = JSON.parse(JSON.stringify(preset.conditions));
+  const radio = document.querySelector(`input[name="advLogic"][value="${preset.logic}"]`);
+  if (radio) radio.checked = true;
+  renderAdvFilterConditions();
+}
+
+function deletePreset() {
+  const idx = document.getElementById('presetSelect').value;
+  if (idx === '') { showToast('削除するプリセットを選択してください', 'info'); return; }
+  const name = state.presets[parseInt(idx)].name;
+  if (!confirm(`プリセット「${name}」を削除しますか？`)) return;
+  state.presets.splice(parseInt(idx), 1);
+  saveSettings();
+  populatePresetSelect();
+  showToast('プリセットを削除しました', 'success');
+}
+
+// ===== オートコンプリート =====
+(function() {
+  document.addEventListener('DOMContentLoaded', () => {
+    const input = document.getElementById('assetUserName');
+    const dd = document.getElementById('userAutocomplete');
+    if (!input || !dd) return;
+    input.addEventListener('input', () => {
+      const q = input.value.trim().toLowerCase(); state.acIndex = -1;
+      if (!q) { dd.classList.remove('open'); document.getElementById('assetUserId').value=''; document.getElementById('assetUserEmail').value=''; return; }
+      const m = state.users.filter(u => u.name.toLowerCase().includes(q)||u.email.toLowerCase().includes(q)||u.department.toLowerCase().includes(q)||u.id.toLowerCase().includes(q)).slice(0,10);
+      if (!m.length) { dd.classList.remove('open'); return; }
+      dd.innerHTML = m.map((u,i) => `<div class="ac-item" data-index="${i}" data-userid="${esc(u.id)}" data-username="${esc(u.name)}" data-useremail="${esc(u.email)}" data-userdept="${esc(u.department)}"><div class="ac-name">${hlMatch(u.name,q)}</div><div class="ac-detail">${hlMatch(u.email,q)} ・ ${esc(u.department)} ・ ${esc(u.title||'')}</div></div>`).join('');
+      dd.classList.add('open');
+      dd.querySelectorAll('.ac-item').forEach(el => el.addEventListener('mousedown', e => { e.preventDefault(); selAcUser(el); }));
+    });
+    input.addEventListener('keydown', e => {
+      const items = dd.querySelectorAll('.ac-item'); if (!dd.classList.contains('open')||!items.length) return;
+      if (e.key==='ArrowDown') { e.preventDefault(); state.acIndex = Math.min(state.acIndex+1, items.length-1); updAcAct(items); }
+      else if (e.key==='ArrowUp') { e.preventDefault(); state.acIndex = Math.max(state.acIndex-1,0); updAcAct(items); }
+      else if (e.key==='Enter'&&state.acIndex>=0) { e.preventDefault(); selAcUser(items[state.acIndex]); }
+      else if (e.key==='Escape') dd.classList.remove('open');
+    });
+    input.addEventListener('blur', () => setTimeout(() => dd.classList.remove('open'), 150));
+    input.addEventListener('focus', () => { if (input.value.trim()) input.dispatchEvent(new Event('input')); });
+  });
+})();
+
+function selAcUser(el) {
+  document.getElementById('assetUserName').value = el.dataset.username;
+  document.getElementById('assetUserId').value = el.dataset.userid;
+  document.getElementById('assetUserEmail').value = el.dataset.useremail;
+  const ds = document.getElementById('assetDepartment');
+  if (el.dataset.userdept) { for (let i=0;i<ds.options.length;i++) if(ds.options[i].value===el.dataset.userdept){ds.value=el.dataset.userdept;break;} }
+  document.getElementById('userAutocomplete').classList.remove('open'); state.acIndex = -1;
+}
+function updAcAct(items) { items.forEach((el,i) => el.classList.toggle('ac-active',i===state.acIndex)); if(state.acIndex>=0&&items[state.acIndex]) items[state.acIndex].scrollIntoView({block:'nearest'}); }
+function hlMatch(text, q) {
+  if (!q) return esc(text); const idx = text.toLowerCase().indexOf(q); if (idx===-1) return esc(text);
+  return esc(text.substring(0,idx))+'<span class="ac-highlight">'+esc(text.substring(idx,idx+q.length))+'</span>'+esc(text.substring(idx+q.length));
+}
+
+// ===== CRUD =====
+function showAddModal() {
+  state.editingAsset = null;
+  document.getElementById('modalTitle').textContent = '資産登録';
+  document.getElementById('assetForm').reset();
+  document.getElementById('assetId').value = ''; document.getElementById('assetUserId').value = ''; document.getElementById('assetUserEmail').value = '';
+  document.getElementById('assetStatus').value = '在庫';
+  document.getElementById('modalOverlay').classList.add('open');
+}
+
+function showEditModal(assetId) {
+  const a = state.assets.find(x => x.id === assetId); if (!a) return;
+  state.editingAsset = a;
+  document.getElementById('modalTitle').textContent = '資産編集';
+  ['assetId:id','assetName:name','assetCategory:category','assetManufacturer:manufacturer','assetModel:model','assetSerial:serial','assetPurchaseDate:purchaseDate','assetPrice:price','assetUserName:userName','assetUserId:userId','assetUserEmail:userEmail','assetDepartment:department','assetLocation:location','assetStatus:status','assetIP:ip','assetMAC:mac','assetOS:os','assetNotes:notes'].forEach(m => {
+    const [elId, key] = m.split(':'); document.getElementById(elId).value = a[key] || '';
+  });
+  document.getElementById('modalOverlay').classList.add('open');
+}
+
+function closeModal() { document.getElementById('modalOverlay').classList.remove('open'); document.getElementById('userAutocomplete').classList.remove('open'); state.editingAsset = null; }
+function closeModalOverlay(e) { if (e.target === e.currentTarget) closeModal(); }
+
+function saveAsset(event) {
+  event.preventDefault();
+  const fields = ['assetId:id','assetName:name','assetCategory:category','assetManufacturer:manufacturer','assetModel:model','assetSerial:serial','assetPurchaseDate:purchaseDate','assetPrice:price','assetUserId:userId','assetUserName:userName','assetUserEmail:userEmail','assetDepartment:department','assetLocation:location','assetStatus:status','assetIP:ip','assetMAC:mac','assetOS:os','assetNotes:notes'];
+  const asset = {}; fields.forEach(m => { const [eId, k] = m.split(':'); asset[k] = document.getElementById(eId).value; });
+  const btn = document.getElementById('saveBtn'); btn.disabled = true; btn.textContent = '保存中...';
+  const isEdit = !!asset.id; const handler = isEdit ? 'updateAsset' : 'addAsset';
+  google.script.run.withSuccessHandler(r => { btn.disabled=false; btn.textContent='保存'; if(r.success){closeModal(); showToast(isEdit?'更新しました':'登録しました','success'); loadData();}else showToast(r.message||'エラー','error'); })
+    .withFailureHandler(e => { btn.disabled=false; btn.textContent='保存'; showToast('エラー: '+e.message,'error'); })[handler](asset);
+}
+
+function confirmDelete(id) {
+  if (!confirm('この資産を削除してよろしいですか？')) return;
+  showLoading();
+  google.script.run.withSuccessHandler(r => { hideLoading(); if(r.success){showToast('削除しました','success');loadData();}else showToast(r.message||'エラー','error'); })
+    .withFailureHandler(e => { hideLoading(); showToast('エラー: '+e.message,'error'); }).deleteAsset(id);
+}
+
+// ===== 詳細 =====
+function showDetail(id) {
+  const a = state.assets.find(x => x.id === id); if (!a) return;
+  document.getElementById('detailTitle').textContent = a.name || '資産詳細';
+  const items = ALL_COLUMNS.map(c => {
+    let val = a[c.key];
+    if (c.key === 'status') val = `<span class="badge badge-${esc(a.status)}">${esc(a.status)}</span>`;
+    else if (c.key === 'price') val = fmtCur(a.price);
+    else val = esc(val) || '-';
+    return `<div class="detail-item"><div class="detail-label">${esc(c.label)}</div><div class="detail-value">${val}</div></div>`;
+  }).join('');
+  document.getElementById('detailBody').innerHTML = `<div class="detail-grid">${items}</div><div id="extDataSection" style="margin-top:20px;border-top:1px solid var(--border);padding-top:16px;"><p style="font-size:12px;color:var(--text-muted);">外部データを読み込み中...</p></div>`;
+  document.getElementById('detailEditBtn').onclick = () => { closeDetail(); showEditModal(id); };
+  document.getElementById('detailOverlay').classList.add('open');
+
+  // 外部データ連携情報を非同期取得
+  google.script.run.withSuccessHandler(extResults => {
+    const section = document.getElementById('extDataSection');
+    if (!section) return;
+    if (!extResults || extResults.length === 0) {
+      section.innerHTML = '<p style="font-size:12px;color:var(--text-muted);">連携データなし</p>';
+      return;
+    }
+    section.innerHTML = extResults.map(src => {
+      const headerRow = src.headers.map(h => `<th>${esc(h)}</th>`).join('');
+      const bodyRows = src.rows.map(r => '<tr>' + r.map(c => `<td>${esc(c)}</td>`).join('') + '</tr>').join('');
+      return `<div style="margin-bottom:16px;"><h4 style="font-size:13px;color:var(--text-secondary);margin-bottom:4px;">${esc(src.sourceName)}<span style="font-size:11px;color:var(--text-muted);margin-left:8px;">最終更新: ${esc(src.lastUpdated)}</span></h4><div class="table-wrap" style="max-height:200px;overflow:auto;"><table class="table"><thead><tr>${headerRow}</tr></thead><tbody>${bodyRows}</tbody></table></div></div>`;
+    }).join('');
+  }).withFailureHandler(() => {
+    const section = document.getElementById('extDataSection');
+    if (section) section.innerHTML = '<p style="font-size:12px;color:var(--text-muted);">外部データの取得に失敗しました</p>';
+  }).getLinkedExternalData(id);
+}
+function closeDetail() { document.getElementById('detailOverlay').classList.remove('open'); }
+function closeDetailOverlay(e) { if (e.target === e.currentTarget) closeDetail(); }
+
+// ===== ユーザー管理 =====
+function renderUsersTable() {
+  const s = (document.getElementById('userSearchKeyword')?.value||'').toLowerCase();
+  const f = s ? state.users.filter(u => u.name.toLowerCase().includes(s)||u.email.toLowerCase().includes(s)||u.department.toLowerCase().includes(s)) : state.users;
+  const tb = document.getElementById('userTableBody');
+  if (!f.length) { tb.innerHTML = '<tr><td colspan="8" style="text-align:center;color:var(--text-muted);padding:40px;">データがありません</td></tr>'; return; }
+  tb.innerHTML = f.map(u => `<tr><td>${esc(u.id)}</td><td>${esc(u.name)}</td><td>${esc(u.email)}</td><td>${esc(u.department)}</td><td>${esc(u.title)}</td><td>${esc(u.phone)}</td><td><span class="badge badge-${esc(u.status)}">${esc(u.status)}</span></td><td class="action-btns" onclick="event.stopPropagation()"><button class="btn btn-sm btn-secondary" onclick="showEditUserModal('${esc(u.id)}')">編集</button><button class="btn btn-sm btn-danger" onclick="confirmDeleteUser('${esc(u.id)}')">削除</button></td></tr>`).join('');
+}
+function filterUsersView() { renderUsersTable(); }
+
+function showAddUserModal() { document.getElementById('userModalTitle').textContent='ユーザー追加'; document.getElementById('userForm').reset(); document.getElementById('editUserId').value=''; document.getElementById('editUserStatus').value='在籍'; document.getElementById('userModalOverlay').classList.add('open'); }
+function showEditUserModal(id) {
+  const u = state.users.find(x => x.id === id); if (!u) return;
+  document.getElementById('userModalTitle').textContent='ユーザー編集';
+  ['editUserId:id','editUserName:name','editUserEmail:email','editUserDepartment:department','editUserTitle:title','editUserPhone:phone','editUserStatus:status'].forEach(m => { const [eId,k]=m.split(':'); document.getElementById(eId).value=u[k]||''; });
+  document.getElementById('userModalOverlay').classList.add('open');
+}
+function closeUserModal() { document.getElementById('userModalOverlay').classList.remove('open'); }
+function closeUserModalOverlay(e) { if (e.target === e.currentTarget) closeUserModal(); }
+
+function saveUser(event) {
+  event.preventDefault();
+  const user = {}; ['editUserId:id','editUserName:name','editUserEmail:email','editUserDepartment:department','editUserTitle:title','editUserPhone:phone','editUserStatus:status'].forEach(m => { const [eId,k]=m.split(':'); user[k]=document.getElementById(eId).value; });
+  const btn = document.getElementById('saveUserBtn'); btn.disabled=true; btn.textContent='保存中...';
+  const isEdit = !!user.id;
+  google.script.run.withSuccessHandler(r => { btn.disabled=false; btn.textContent='保存'; if(r.success){closeUserModal();showToast(isEdit?'更新しました':'追加しました','success');loadData();}else showToast(r.message||'エラー','error'); })
+    .withFailureHandler(e => { btn.disabled=false; btn.textContent='保存'; showToast('エラー: '+e.message,'error'); })[isEdit?'updateUser':'addUser'](user);
+}
+function confirmDeleteUser(id) {
+  if (!confirm('このユーザーを削除してよろしいですか？')) return; showLoading();
+  google.script.run.withSuccessHandler(r => { hideLoading(); if(r.success){showToast('削除しました','success');loadData();}else showToast(r.message||'エラー','error'); })
+    .withFailureHandler(e => { hideLoading(); showToast('エラー: '+e.message,'error'); }).deleteUser(id);
+}
+
+// ===== 変更履歴 =====
+function renderHistory() {
+  const s = (document.getElementById('historySearch').value||'').toLowerCase();
+  const f = s ? state.historyData.filter(h => h.assetId.toLowerCase().includes(s)) : state.historyData;
+  const tb = document.getElementById('historyTableBody');
+  if (!f.length) { tb.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-muted);padding:40px;">データがありません</td></tr>'; return; }
+  tb.innerHTML = f.slice(0,200).map(h => `<tr><td>${esc(h.dateTime)}</td><td>${esc(h.assetId)}</td><td><span class="badge badge-${esc(h.changeType)}">${esc(h.changeType)}</span></td><td title="${esc(h.changeDescription)}">${esc(h.changeDescription)}</td><td>${esc(h.changedBy)}</td></tr>`).join('');
+}
+function filterHistory() { renderHistory(); }
+
+// ===== CSV出力 =====
+function exportCSV() {
+  showLoading();
+  google.script.run.withSuccessHandler(data => {
+    hideLoading();
+    if (!data||!data.length) { showToast('エクスポートするデータがありません','info'); return; }
+    const bom = '\uFEFF';
+    const csv = data.map(r => r.map(c => { const s = String(c==null?'':c); return s.includes(',')||s.includes('"')||s.includes('\n')?'"'+s.replace(/"/g,'""')+'"':s; }).join(',')).join('\n');
+    const blob = new Blob([bom+csv],{type:'text/csv;charset=utf-8;'}); const url = URL.createObjectURL(blob);
+    const link = document.createElement('a'); link.href=url; link.download=`IT資産台帳_${new Date().toISOString().slice(0,10)}.csv`; link.click(); URL.revokeObjectURL(url);
+    showToast('CSVをダウンロードしました','success');
+  }).withFailureHandler(e => { hideLoading(); showToast('エラー: '+e.message,'error'); }).exportAssets();
+}
+
+// ===== インポート =====
+let importParsedData = [];
+function showImportModal() { document.getElementById('importFile').value=''; document.getElementById('importPreview').style.display='none'; document.getElementById('importBtn').disabled=true; importParsedData=[]; document.getElementById('importOverlay').classList.add('open'); document.getElementById('importFile').onchange=handleImportFile; }
+
+function downloadTemplate() {
+  const target = document.getElementById('importTarget').value;
+  const bom = '\uFEFF';
+  let headers, filename;
+  if (target === 'assets') {
+    headers = ['資産番号','資産名','カテゴリ','メーカー','モデル','シリアル番号','購入日','購入金額','使用者ID','使用者名','使用者メール','部署','設置場所','ステータス','IPアドレス','MACアドレス','OS','備考'];
+    filename = 'IT資産_インポートテンプレート.csv';
+  } else {
+    headers = ['ユーザーID','氏名','メールアドレス','部署','役職','電話番号','在籍状況'];
+    filename = 'ユーザー_インポートテンプレート.csv';
+  }
+  const csv = headers.join(',');
+  const blob = new Blob([bom + csv + '\n'], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url; link.download = filename; link.click();
+  URL.revokeObjectURL(url);
+  showToast('テンプレートをダウンロードしました', 'success');
+}
+function closeImportModal() { document.getElementById('importOverlay').classList.remove('open'); }
+function closeImportOverlay(e) { if (e.target === e.currentTarget) closeImportModal(); }
+
+function handleImportFile(e) {
+  const file = e.target.files[0]; if (!file) return;
+  const reader = new FileReader();
+  reader.onload = evt => { const rows = parseCSV(evt.target.result); if(rows.length<2){showToast('データが見つかりません','error');return;} importParsedData=rows; renderImportPreview(rows); document.getElementById('importBtn').disabled=false; };
+  reader.readAsText(file,'UTF-8');
+}
+
+function parseCSV(text) {
+  const lines=[]; let cur=[],field='',inQ=false;
+  for(let i=0;i<text.length;i++){const c=text[i],n=text[i+1]; if(inQ){if(c==='"'&&n==='"'){field+='"';i++;}else if(c==='"')inQ=false;else field+=c;}else{if(c==='"')inQ=true;else if(c===','||c==='\t'){cur.push(field.trim());field='';}else if(c==='\n'||(c==='\r'&&n==='\n')){cur.push(field.trim());if(cur.some(x=>x!==''))lines.push(cur);cur=[];field='';if(c==='\r')i++;}else field+=c;}}
+  cur.push(field.trim()); if(cur.some(x=>x!==''))lines.push(cur); return lines;
+}
+
+function renderImportPreview(rows) {
+  const h=rows[0], d=rows.slice(1), tbl=document.getElementById('importPreviewTable');
+  tbl.querySelector('thead tr').innerHTML=h.map(x=>`<th>${esc(x)}</th>`).join('');
+  tbl.querySelector('tbody').innerHTML=d.slice(0,5).map(r=>'<tr>'+h.map((_,i)=>`<td>${esc(r[i]||'')}</td>`).join('')+'</tr>').join('');
+  document.getElementById('importRowCount').textContent=`全 ${d.length} 件`;
+  document.getElementById('importPreview').style.display='block';
+}
+
+function executeImport() {
+  if(importParsedData.length<2)return; const target=document.getElementById('importTarget').value, skip=document.getElementById('importSkipDuplicate').checked;
+  const h=importParsedData[0], d=importParsedData.slice(1), btn=document.getElementById('importBtn'); btn.disabled=true; btn.textContent='インポート中...'; showLoading();
+  const mapped = target==='assets'?mapAssetImport(h,d):mapUserImport(h,d);
+  const fn = target==='assets'?'importAssets':'importUsers';
+  google.script.run.withSuccessHandler(r=>{hideLoading();btn.disabled=false;btn.textContent='インポート実行';if(r.success){closeImportModal();showToast(`${r.imported}件をインポート`+(r.skipped>0?`（${r.skipped}件スキップ）`:''),'success');loadData();}else showToast(r.message||'エラー','error');})
+    .withFailureHandler(e=>{hideLoading();btn.disabled=false;btn.textContent='インポート実行';showToast('エラー: '+e.message,'error');})[fn](mapped, skip);
+}
+
+function mapAssetImport(headers, rows) {
+  const al={'資産番号':'id','id':'id','asset_id':'id','資産名':'name','名称':'name','name':'name','カテゴリ':'category','category':'category','メーカー':'manufacturer','manufacturer':'manufacturer','モデル':'model','model':'model','シリアル番号':'serial','シリアル':'serial','serial':'serial','購入日':'purchaseDate','purchase_date':'purchaseDate','購入金額':'price','金額':'price','price':'price','使用者ID':'userId','使用者id':'userId','user_id':'userId','使用者':'userName','使用者名':'userName','user':'userName','user_name':'userName','使用者メール':'userEmail','メール':'userEmail','email':'userEmail','メールアドレス':'userEmail','user_email':'userEmail','部署':'department','department':'department','設置場所':'location','location':'location','ステータス':'status','status':'status','IPアドレス':'ip','ipアドレス':'ip','ip':'ip','IP':'ip','MACアドレス':'mac','macアドレス':'mac','mac':'mac','MAC':'mac','os':'os','OS':'os','備考':'notes','notes':'notes'};
+  const cm={}; headers.forEach((h,i)=>{const k=al[h]||al[h.toLowerCase()]||al[h.replace(/[\s_]/g,'')];if(k)cm[k]=i;});
+  return rows.map(r=>{const g=k=>(cm[k]!==undefined?(r[cm[k]]||''):'');return{id:g('id'),name:g('name'),category:g('category'),manufacturer:g('manufacturer'),model:g('model'),serial:g('serial'),purchaseDate:g('purchaseDate'),price:g('price'),userId:g('userId'),userName:g('userName'),userEmail:g('userEmail'),department:g('department'),location:g('location'),status:g('status'),ip:g('ip'),mac:g('mac'),os:g('os'),notes:g('notes')};});
+}
+function mapUserImport(headers, rows) {
+  const al={'ユーザーID':'id','ユーザーid':'id','user_id':'id','id':'id','氏名':'name','名前':'name','name':'name','メールアドレス':'email','メール':'email','email':'email','部署':'department','department':'department','役職':'title','title':'title','電話番号':'phone','電話':'phone','phone':'phone','在籍状況':'status','ステータス':'status','status':'status'};
+  const cm={}; headers.forEach((h,i)=>{const k=al[h]||al[h.toLowerCase()]||al[h.replace(/[\s_]/g,'')];if(k)cm[k]=i;});
+  return rows.map(r=>{const g=k=>(cm[k]!==undefined?(r[cm[k]]||''):'');return{id:g('id'),name:g('name'),email:g('email'),department:g('department'),title:g('title'),phone:g('phone'),status:g('status')};});
+}
+
+// ===== ユーティリティ =====
+function showLoading() { document.getElementById('loadingOverlay').classList.add('show'); }
+function hideLoading() { document.getElementById('loadingOverlay').classList.remove('show'); }
+function showToast(msg, type) { const c=document.getElementById('toastContainer'),t=document.createElement('div');t.className=`toast ${type||'info'}`;t.textContent=msg;c.appendChild(t);setTimeout(()=>t.remove(),3500); }
+function fmtCur(v) { return '\u00A5'+(Number(v)||0).toLocaleString('ja-JP'); }
+function pct(c,t) { return t?Math.round(c/t*100)+'%':'0%'; }
+function esc(s) { if(s==null)return'';const d=document.createElement('div');d.textContent=String(s);return d.innerHTML; }
+</script>
